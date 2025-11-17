@@ -4,6 +4,26 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use tauri::WindowEvent;
 
+#[cfg(target_os = "windows")]
+use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App, AppHandle, Manager};
+#[cfg(target_os = "windows")]
+use tauri_plugin_notification::{NotificationExt, PermissionState};
+
+#[cfg(target_os = "windows")]
+const TRAY_ICON_ID: &str = "golpac-support-tray";
+#[cfg(target_os = "windows")]
+const TRAY_MENU_ID_SHOW: &str = "golpac-tray-show";
+#[cfg(target_os = "windows")]
+const TRAY_MENU_ID_QUIT: &str = "golpac-tray-quit";
+#[cfg(target_os = "windows")]
+const TRAY_TOOLTIP: &str = "Golpac Support";
+#[cfg(target_os = "windows")]
+const NOTIFICATION_TITLE: &str = "Golpac Support";
+#[cfg(target_os = "windows")]
+const NOTIFICATION_BODY: &str = "Golpac Support Application is still running in the background.";
+#[cfg(target_os = "windows")]
+const MAIN_WINDOW_LABEL: &str = "main";
+
 //
 // ───────── System info ─────────
 //
@@ -178,22 +198,98 @@ async fn capture_screenshot() -> Result<String, String> {
     Ok(general_purpose::STANDARD.encode(png_bytes))
 }
 
+#[cfg(target_os = "windows")]
+fn ensure_notification_permission(app_handle: &AppHandle) {
+    if let Ok(state) = app_handle.notification().permission_state() {
+        if matches!(state, PermissionState::Granted) {
+            return;
+        }
+    }
+
+    let _ = app_handle.notification().request_permission();
+}
+
+#[cfg(target_os = "windows")]
+fn show_background_notification(app_handle: &AppHandle) {
+    ensure_notification_permission(app_handle);
+    let _ = app_handle
+        .notification()
+        .builder()
+        .title(NOTIFICATION_TITLE)
+        .body(NOTIFICATION_BODY)
+        .show();
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_main_window(app_handle: &AppHandle) {
+    if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
+    let handle = app.handle();
+    let tray_menu = MenuBuilder::new(&handle)
+        .text(TRAY_MENU_ID_SHOW, "Open Golpac Support")
+        .text(TRAY_MENU_ID_QUIT, "Quit Golpac Support")
+        .build()?;
+
+    let mut tray_builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
+        .menu(&tray_menu)
+        .tooltip(TRAY_TOOLTIP)
+        .on_menu_event(|app_handle, event| match event.id().as_ref() {
+            TRAY_MENU_ID_SHOW => reveal_main_window(app_handle),
+            TRAY_MENU_ID_QUIT => app_handle.exit(0),
+            _ => {}
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        tray_builder = tray_builder.icon(icon);
+    }
+
+    tray_builder.build(app)?;
+    Ok(())
+}
+
 //
 // ───────── Tauri main ─────────
 //
 
 fn main() {
-    tauri::Builder::default()
+    #[cfg(target_os = "windows")]
+    let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
+    #[cfg(not(target_os = "windows"))]
+    let builder = tauri::Builder::default();
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_system_info,
             get_printers,
             capture_screenshot
         ])
+        .setup(|app| {
+            #[cfg(not(target_os = "windows"))]
+            let _ = app;
+
+            #[cfg(target_os = "windows")]
+            {
+                setup_windows_tray(app)?;
+                ensure_notification_permission(&app.handle());
+            }
+
+            Ok(())
+        })
         // Close button → hide window (app keeps running)
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                #[cfg(target_os = "windows")]
+                {
+                    show_background_notification(&window.app_handle());
+                }
             }
         })
         .run(tauri::generate_context!())
