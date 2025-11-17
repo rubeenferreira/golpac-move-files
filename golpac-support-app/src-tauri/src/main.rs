@@ -230,8 +230,7 @@ fn reveal_main_window(app_handle: &AppHandle) {
 
 #[cfg(target_os = "windows")]
 fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
-    let handle = app.handle();
-    let tray_menu = MenuBuilder::new(&handle)
+    let tray_menu = MenuBuilder::new(app)
         .text(TRAY_MENU_ID_SHOW, "Open Golpac Support")
         .text(TRAY_MENU_ID_QUIT, "Quit Golpac Support")
         .build()?;
