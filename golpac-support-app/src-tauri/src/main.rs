@@ -1,8 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use tauri::WindowEvent;
 
-// ───────── System info (your existing code) ─────────
+//
+// ───────── System info ─────────
+//
 
 #[derive(Serialize)]
 struct SystemInfo {
@@ -31,9 +34,11 @@ fn get_system_info() -> SystemInfo {
     }
 }
 
+//
 // ───────── Printer info ─────────
+//
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Clone)]
 struct PrinterInfo {
     name: String,
     ip: Option<String>,
@@ -44,10 +49,7 @@ struct PrinterInfo {
 fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
     use serde::Deserialize;
     use serde_json;
-    use std::os::windows::process::CommandExt;
     use std::process::Command;
-
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     #[derive(Deserialize)]
     struct PsPrinter {
@@ -59,12 +61,9 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
         printer_status: Option<serde_json::Value>,
     }
 
-    // Hidden PowerShell window, non-interactive
+    // PowerShell → JSON
     let output = Command::new("powershell")
-        .creation_flags(CREATE_NO_WINDOW)
         .args([
-            "-NoLogo",
-            "-NonInteractive",
             "-Command",
             "Get-Printer | Select-Object Name,PortName,PrinterStatus | ConvertTo-Json -Depth 2",
         ])
@@ -73,7 +72,7 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
 
     if !output.status.success() {
         return Err(format!(
-            "PowerShell exited with non-zero status: {}",
+            "PowerShell exited with status: {}",
             output.status
         ));
     }
@@ -85,12 +84,12 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
         return Ok(Vec::new());
     }
 
-    // ConvertTo-Json returns array OR single object depending on count
+    // ConvertTo-Json returns either an array or a single object
     let printers: Vec<PsPrinter> = match serde_json::from_str(trimmed) {
-        Ok(list) => list,
+        Ok(v) => v,
         Err(_) => {
             let single: PsPrinter =
-                serde_json::from_str(trimmed).map_err(|e| format!("Failed to parse: {e}"))?;
+                serde_json::from_str(trimmed).map_err(|e| format!("Parse error: {e}"))?;
             vec![single]
         }
     };
@@ -98,15 +97,18 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
     let result = printers
         .into_iter()
         .map(|p| {
+            // PrinterStatus may be a number or string
             let status = p.printer_status.map(|v| {
                 let s = v.to_string();
                 s.trim_matches('"').to_string()
             });
 
-            // Derive IP from PortName if it looks like IPv4 or host:port
+            // Treat PortName that looks like an IP / host:port as "ip"
             let ip = p.port_name.as_ref().and_then(|port| {
                 let t = port.trim();
-                if t.contains('.') && t.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ':')
+                if t.chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == ':')
+                    && t.contains('.')
                 {
                     Some(t.to_string())
                 } else {
@@ -127,89 +129,33 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
 
 #[cfg(not(target_os = "windows"))]
 fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
-    // On macOS/Linux, just return empty for now.
+    // For now: no printer info on macOS/Linux
     Ok(Vec::new())
 }
 
+/// Async command so the UI doesn't freeze while PowerShell runs.
 #[tauri::command]
 async fn get_printers() -> Result<Vec<PrinterInfo>, String> {
     tauri::async_runtime::spawn_blocking(|| get_printers_impl())
         .await
-        .map_err(|e| format!("Failed to join printer task: {e}"))?
+        .map_err(|e| format!("Thread join error: {e}"))?
 }
 
-// ───────── Screenshot capture ─────────
-
-#[cfg(target_os = "windows")]
-fn capture_screenshot_impl() -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-    use std::process::Command;
-
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    // PowerShell script:
-    // - Capture full virtual screen using .NET
-    // - Save to %TEMP%\golpac_support_screenshot.png
-    // - Output base64 PNG to stdout
-    let ps_script = r#"
-$path = Join-Path $env:TEMP 'golpac_support_screenshot.png'
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$screenWidth  = [System.Windows.Forms.SystemInformation]::VirtualScreen.Width
-$screenHeight = [System.Windows.Forms.SystemInformation]::VirtualScreen.Height
-$bitmap = New-Object System.Drawing.Bitmap $screenWidth, $screenHeight
-$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-$graphics.CopyFromScreen(0, 0, 0, 0, $bitmap.Size)
-$bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-$graphics.Dispose()
-$bitmap.Dispose()
-[Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
-"#;
-
-    let output = Command::new("powershell")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["-NoLogo", "-NonInteractive", "-Command", ps_script])
-        .output()
-        .map_err(|e| format!("Failed to run PowerShell for screenshot: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Screenshot PowerShell exited with non-zero status: {}",
-            output.status
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed = stdout.trim().to_string();
-
-    if trimmed.is_empty() {
-        Err("Screenshot command produced no output".into())
-    } else {
-        Ok(trimmed)
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn capture_screenshot_impl() -> Result<String, String> {
-    Err("Screenshot capture is only implemented on Windows for now.".into())
-}
-
-#[tauri::command]
-async fn capture_screenshot() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| capture_screenshot_impl())
-        .await
-        .map_err(|e| format!("Failed to join screenshot task: {e}"))?
-}
-
+//
 // ───────── Tauri main ─────────
+//
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![
-            get_system_info,
-            get_printers,
-            capture_screenshot
-        ])
+        .invoke_handler(tauri::generate_handler![get_system_info, get_printers])
+        // On Windows: clicking X hides window to tray instead of quitting.
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "windows")]
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

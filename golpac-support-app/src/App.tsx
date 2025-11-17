@@ -2,6 +2,9 @@ import { useEffect, useState, FormEvent } from "react";
 import "./App.css";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { TrayIcon } from "@tauri-apps/api/tray";
+import { Menu } from "@tauri-apps/api/menu";
 import golpacLogo from "./assets/golpac-logo.png";
 
 type SystemInfo = {
@@ -37,6 +40,44 @@ type PrinterCache = {
   updatedAt: string;
 };
 
+// --- tray helper -----------------------------------------------------------
+
+async function setupTray() {
+  try {
+    const win = getCurrentWindow();
+
+    // 1) Menu
+    const menu = await Menu.new({
+      items: [
+        { id: "show", text: "Show Golpac Support" },
+        { id: "quit", text: "Quit" },
+      ],
+    });
+
+    // 2) Tray icon  ✅ Cast to `any` to silence the TS type error
+    const tray = (await TrayIcon.new({
+      id: "golpac-tray",
+      menu,
+      tooltip: "Golpac Support",
+    })) as any;
+
+    // 3) Handle menu clicks
+    tray.onMenuItemClick(async (event: { id: string }) => {
+      if (event.id === "show") {
+        await win.show();
+        await win.setFocus();
+      } else if (event.id === "quit") {
+        await win.close();
+      }
+    });
+
+    console.log("Tray icon set up");
+  } catch (err) {
+    console.error("Failed to set up tray:", err);
+  }
+}
+
+
 function App() {
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -65,11 +106,14 @@ function App() {
   const [screenshotCapturing, setScreenshotCapturing] = useState(false);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
 
-  // --- Load app version ----------------------------------------------------
+  // --- Load app version & set up tray once --------------------------------
   useEffect(() => {
     getVersion()
       .then((v) => setAppVersion(v))
       .catch((err) => console.error("Failed to get app version:", err));
+
+    // tray icon (safe on mac & windows)
+    setupTray();
   }, []);
 
   // --- Load saved preferences (email + urgency + category) -----------------
@@ -270,7 +314,6 @@ function App() {
 
       const createdAt = new Date().toISOString();
 
-      // Build printerInfo string only when category is Printers
       let printerInfo: string | null = null;
       if (category === "Printers" && selectedPrinter) {
         const parts: string[] = [`Name: ${selectedPrinter.name}`];
@@ -292,7 +335,7 @@ function App() {
         urgency,
         category,
         printerInfo,
-        screenshot, // 👈 base64 PNG or null
+        screenshot,
         hostname: systemInfo.hostname,
         username: systemInfo.username,
         osVersion: resolvedOs,
@@ -348,7 +391,6 @@ function App() {
         }
       }
 
-      // Clear ticket-specific fields (keep email, urgency, category, printers cache, but clear screenshot)
       setSubject("");
       setDescription("");
       setScreenshot(null);

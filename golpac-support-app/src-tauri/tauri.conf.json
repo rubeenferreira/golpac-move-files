@@ -3,24 +3,29 @@
   "productName": "golpac-support-app",
   "version": "0.1.0",
   "identifier": "com.rubenferreira.golpac-support-app",
+
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
+
   "app": {
     "windows": [
       {
-        "title": "golpac-support-app",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "Golpac Support",
+        "width": 900,
+        "height": 650,
+        "resizable": true
       }
     ],
     "security": {
       "csp": null
     }
   },
+
   "bundle": {
     "active": true,
     "targets": "all",
@@ -31,5 +36,24 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+
+  "plugins": {
+    "system-tray": {
+      "iconPath": "icons/icon.png",
+      "menu": [
+        {
+          "id": "show",
+          "text": "Open Golpac Support"
+        },
+        {
+          "id": "quit",
+          "text": "Quit Golpac Support"
+        }
+      ]
+    },
+    "notification": {
+      "enabled": true
+    }
   }
 }
