@@ -270,47 +270,35 @@ function App() {
     setSelectedPrinter(found);
   }, [selectedPrinterName, printers]);
 
-  // --- Screenshot capture --------------------------------------------------
-  async function handleCopyQuickAssistCode() {
+  async function handleConnectQuickAssist() {
     const trimmed = quickAssistCode.trim();
     if (!trimmed) {
-      setQuickAssistError("Enter the code we provide before copying.");
+      setQuickAssistError("Enter the security code we provide first.");
       setQuickAssistFeedback(null);
       return;
     }
 
-    if (
-      typeof navigator === "undefined" ||
-      !navigator.clipboard ||
-      typeof navigator.clipboard.writeText !== "function"
-    ) {
-      setQuickAssistError(
-        "Clipboard access is unavailable. Please copy the code manually."
-      );
-      setQuickAssistFeedback(null);
-      return;
-    }
-
-    try {
-      await navigator.clipboard.writeText(trimmed);
-      setQuickAssistFeedback("Code copied. Paste it inside the Quick Assist app.");
-      setQuickAssistError(null);
-    } catch (err) {
-      console.error("Failed to copy Quick Assist code:", err);
-      setQuickAssistError("Could not copy the code. Please copy it manually.");
-      setQuickAssistFeedback(null);
-    }
-  }
-
-  async function handleLaunchQuickAssist() {
     setQuickAssistLaunching(true);
     setQuickAssistFeedback(null);
     setQuickAssistError(null);
 
     try {
+      if (
+        typeof navigator !== "undefined" &&
+        navigator.clipboard &&
+        typeof navigator.clipboard.writeText === "function"
+      ) {
+        try {
+          await navigator.clipboard.writeText(trimmed);
+          setQuickAssistFeedback("Code copied. Quick Assist will open shortly.");
+        } catch (copyErr) {
+          console.warn("Could not copy Quick Assist code:", copyErr);
+        }
+      }
+
       await invoke("launch_quick_assist");
       setQuickAssistFeedback(
-        "Attempted to open Quick Assist. If nothing appears, press Windows + Ctrl + Q."
+        "Quick Assist should open. If you don't see it, press Windows + Ctrl + Q and paste the code."
       );
     } catch (err) {
       console.error("Failed to launch Quick Assist:", err);
@@ -322,6 +310,7 @@ function App() {
     }
   }
 
+  // --- Screenshot capture --------------------------------------------------
   async function handleCaptureScreenshot() {
     setScreenshotCapturing(true);
     setScreenshotError(null);
@@ -643,9 +632,7 @@ function App() {
                 <span>Use Microsoft Quick Assist so we can connect.</span>
               </div>
               <p className="field-hint" style={{ marginTop: 4 }}>
-                Enter the 6-digit security code your Golpac technician provides,
-                copy it, then launch Quick Assist (Windows + Ctrl + Q) and paste
-                the code there.
+                Enter the 6-digit code we provide, then select Connect via Quick Assist.
               </p>
               <div
                 style={{
@@ -677,17 +664,10 @@ function App() {
                   <button
                     type="button"
                     className="secondary-btn"
-                    onClick={handleCopyQuickAssistCode}
-                  >
-                    Copy code
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-btn"
-                    onClick={handleLaunchQuickAssist}
+                    onClick={handleConnectQuickAssist}
                     disabled={quickAssistLaunching}
                   >
-                    {quickAssistLaunching ? "Opening…" : "Open Quick Assist"}
+                    {quickAssistLaunching ? "Connecting…" : "Connect via Quick Assist"}
                   </button>
                 </div>
                 {quickAssistFeedback && (
