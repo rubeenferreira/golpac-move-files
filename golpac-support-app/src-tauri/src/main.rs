@@ -281,6 +281,32 @@ async fn capture_screenshot() -> Result<String, String> {
     Ok(general_purpose::STANDARD.encode(png_bytes))
 }
 
+#[tauri::command]
+fn launch_quick_assist() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::{env, path::PathBuf, process::Command};
+
+        let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let exe_path = PathBuf::from(system_root).join("System32").join("QuickAssist.exe");
+
+        Command::new(&exe_path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| {
+                format!(
+                    "Failed to launch Quick Assist from {}: {e}",
+                    exe_path.display()
+                )
+            })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Quick Assist is only available on Windows devices.".to_string())
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn ensure_notification_permission(app_handle: &AppHandle) {
     if let Ok(state) = app_handle.notification().permission_state() {
@@ -349,7 +375,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_system_info,
             get_printers,
-            capture_screenshot
+            capture_screenshot,
+            launch_quick_assist
         ])
         .setup(|app| {
             #[cfg(not(target_os = "windows"))]

@@ -60,6 +60,12 @@ function App() {
   const [printersLastUpdated, setPrintersLastUpdated] = useState<string | null>(
     null
   );
+  const [quickAssistCode, setQuickAssistCode] = useState("");
+  const [quickAssistFeedback, setQuickAssistFeedback] = useState<string | null>(
+    null
+  );
+  const [quickAssistError, setQuickAssistError] = useState<string | null>(null);
+  const [quickAssistLaunching, setQuickAssistLaunching] = useState(false);
 
   // Screenshot state
   const [screenshot, setScreenshot] = useState<string | null>(null);
@@ -265,6 +271,57 @@ function App() {
   }, [selectedPrinterName, printers]);
 
   // --- Screenshot capture --------------------------------------------------
+  async function handleCopyQuickAssistCode() {
+    const trimmed = quickAssistCode.trim();
+    if (!trimmed) {
+      setQuickAssistError("Enter the code we provide before copying.");
+      setQuickAssistFeedback(null);
+      return;
+    }
+
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.clipboard ||
+      typeof navigator.clipboard.writeText !== "function"
+    ) {
+      setQuickAssistError(
+        "Clipboard access is unavailable. Please copy the code manually."
+      );
+      setQuickAssistFeedback(null);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(trimmed);
+      setQuickAssistFeedback("Code copied. Paste it inside the Quick Assist app.");
+      setQuickAssistError(null);
+    } catch (err) {
+      console.error("Failed to copy Quick Assist code:", err);
+      setQuickAssistError("Could not copy the code. Please copy it manually.");
+      setQuickAssistFeedback(null);
+    }
+  }
+
+  async function handleLaunchQuickAssist() {
+    setQuickAssistLaunching(true);
+    setQuickAssistFeedback(null);
+    setQuickAssistError(null);
+
+    try {
+      await invoke("launch_quick_assist");
+      setQuickAssistFeedback(
+        "Attempted to open Quick Assist. If nothing appears, press Windows + Ctrl + Q."
+      );
+    } catch (err) {
+      console.error("Failed to launch Quick Assist:", err);
+      setQuickAssistError(
+        "We couldn't open Quick Assist automatically. Press Windows + Ctrl + Q instead."
+      );
+    } finally {
+      setQuickAssistLaunching(false);
+    }
+  }
+
   async function handleCaptureScreenshot() {
     setScreenshotCapturing(true);
     setScreenshotError(null);
@@ -329,6 +386,7 @@ function App() {
         urgency,
         category,
         printerInfo,
+        quickAssistCode: quickAssistCode.trim() || null,
         screenshot,
         hostname: systemInfo.hostname,
         username: systemInfo.username,
@@ -578,6 +636,72 @@ function App() {
                 required
               />
             </label>
+
+            <section className="quick-assist-box">
+              <div className="quick-assist-header">
+                <strong>Need remote help?</strong>
+                <span>Use Microsoft Quick Assist so we can connect.</span>
+              </div>
+              <p className="field-hint" style={{ marginTop: 4 }}>
+                Enter the 6-digit security code your Golpac technician provides,
+                copy it, then launch Quick Assist (Windows + Ctrl + Q) and paste
+                the code there.
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                  marginTop: 8,
+                }}
+              >
+                <input
+                  type="text"
+                  placeholder="Enter the Quick Assist code"
+                  value={quickAssistCode}
+                  onChange={(e) => {
+                    setQuickAssistCode(e.target.value);
+                    setQuickAssistError(null);
+                    setQuickAssistFeedback(null);
+                  }}
+                  maxLength={25}
+                  style={{ fontFamily: "var(--font-mono, 'Courier New', monospace)" }}
+                />
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={handleCopyQuickAssistCode}
+                  >
+                    Copy code
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={handleLaunchQuickAssist}
+                    disabled={quickAssistLaunching}
+                  >
+                    {quickAssistLaunching ? "Opening…" : "Open Quick Assist"}
+                  </button>
+                </div>
+                {quickAssistFeedback && (
+                  <div className="field-hint" style={{ color: "#2f855a" }}>
+                    {quickAssistFeedback}
+                  </div>
+                )}
+                {quickAssistError && (
+                  <div className="field-hint" style={{ color: "#c53030" }}>
+                    {quickAssistError}
+                  </div>
+                )}
+              </div>
+            </section>
 
             <div className="actions-row">
               <button
