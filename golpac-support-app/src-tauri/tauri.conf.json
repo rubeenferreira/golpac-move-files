@@ -51,9 +51,6 @@
           "text": "Quit Golpac Support"
         }
       ]
-    },
-    "notification": {
-      "enabled": true
     }
   }
 }
