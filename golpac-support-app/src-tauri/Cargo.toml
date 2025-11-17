@@ -27,4 +27,4 @@ screenshots = "0.8"
 image = { version = "0.25", features = ["png"] }
 base64 = "0.22"
 tauri-plugin-notification = "2"
-
+windows = { version = "0.52", features = ["Win32_Graphics_Printing"] }

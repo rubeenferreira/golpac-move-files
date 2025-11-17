@@ -8,6 +8,22 @@ use tauri::WindowEvent;
 use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App, AppHandle, Manager};
 #[cfg(target_os = "windows")]
 use tauri_plugin_notification::{NotificationExt, PermissionState};
+#[cfg(target_os = "windows")]
+use windows::{
+    core::{PCWSTR, PWSTR},
+    Win32::Graphics::Printing::{
+        EnumPrintersW, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL, PRINTER_INFO_2W,
+        PRINTER_STATUS_BUSY, PRINTER_STATUS_DOOR_OPEN, PRINTER_STATUS_DRIVER_UPDATE_NEEDED,
+        PRINTER_STATUS_ERROR, PRINTER_STATUS_INITIALIZING, PRINTER_STATUS_IO_ACTIVE,
+        PRINTER_STATUS_MANUAL_FEED, PRINTER_STATUS_NOT_AVAILABLE, PRINTER_STATUS_NO_TONER,
+        PRINTER_STATUS_OFFLINE, PRINTER_STATUS_OUTPUT_BIN_FULL, PRINTER_STATUS_OUT_OF_MEMORY,
+        PRINTER_STATUS_PAGE_PUNT, PRINTER_STATUS_PAPER_JAM, PRINTER_STATUS_PAPER_OUT,
+        PRINTER_STATUS_PAPER_PROBLEM, PRINTER_STATUS_PAUSED, PRINTER_STATUS_PENDING_DELETION,
+        PRINTER_STATUS_POWER_SAVE, PRINTER_STATUS_PRINTING, PRINTER_STATUS_PROCESSING,
+        PRINTER_STATUS_SERVER_OFFLINE, PRINTER_STATUS_SERVER_UNKNOWN, PRINTER_STATUS_TONER_LOW,
+        PRINTER_STATUS_USER_INTERVENTION, PRINTER_STATUS_WAITING, PRINTER_STATUS_WARMING_UP,
+    },
+};
 
 #[cfg(target_os = "windows")]
 const TRAY_ICON_ID: &str = "golpac-support-tray";
@@ -68,86 +84,153 @@ struct PrinterInfo {
 
 #[cfg(target_os = "windows")]
 fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
-    use serde::Deserialize;
-    use serde_json;
-    use std::process::Command;
-    use std::os::windows::process::CommandExt;
+    let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+    let mut needed = 0u32;
+    let mut returned = 0u32;
 
-    // Hide PowerShell window completely
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    const DETACHED_PROCESS: u32 = 0x00000008;
+    unsafe {
+        // First call to determine required buffer size (it will return ERROR_INSUFFICIENT_BUFFER).
+        let _ = EnumPrintersW(
+            flags,
+            None::<PCWSTR>,
+            2,
+            None,
+            &mut needed,
+            &mut returned,
+        );
 
-    #[derive(Deserialize)]
-    struct PsPrinter {
-        #[serde(rename = "Name")]
-        name: String,
-        #[serde(rename = "PortName")]
-        port_name: Option<String>,
-        #[serde(rename = "PrinterStatus")]
-        printer_status: Option<serde_json::Value>,
-    }
-
-    let output = Command::new("powershell")
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
-        .args([
-            "-Command",
-            "Get-Printer | Select-Object Name,PortName,PrinterStatus | ConvertTo-Json -Depth 2",
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "PowerShell exited with status: {}",
-            output.status
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed = stdout.trim();
-
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let printers: Vec<PsPrinter> = match serde_json::from_str(trimmed) {
-        Ok(v) => v,
-        Err(_) => {
-            let single: PsPrinter =
-                serde_json::from_str(trimmed).map_err(|e| format!("Parse error: {e}"))?;
-            vec![single]
+        if needed == 0 {
+            return Ok(Vec::new());
         }
-    };
 
-    let result = printers
-        .into_iter()
-        .map(|p| {
-            let status = p.printer_status.map(|v| {
-                let s = v.to_string();
-                s.trim_matches('"').to_string()
-            });
+        let mut buffer = vec![0u8; needed as usize];
+        EnumPrintersW(
+            flags,
+            None::<PCWSTR>,
+            2,
+            Some(buffer.as_mut_slice()),
+            &mut needed,
+            &mut returned,
+        )
+        .map_err(|e| format!("EnumPrintersW failed: {e:?}"))?;
 
-            let ip = p.port_name.as_ref().and_then(|port| {
-                let t = port.trim();
-                if t.chars()
-                    .all(|c| c.is_ascii_digit() || c == '.' || c == ':')
-                    && t.contains('.')
-                {
-                    Some(t.to_string())
-                } else {
-                    None
-                }
-            });
+        let printers = std::slice::from_raw_parts(
+            buffer.as_ptr() as *const PRINTER_INFO_2W,
+            returned as usize,
+        );
 
-            PrinterInfo {
-                name: p.name,
-                ip,
-                status,
+        Ok(printers
+            .iter()
+            .filter_map(|info| {
+                let name = pwstr_to_string(info.pPrinterName)?;
+                let port_name = pwstr_to_string(info.pPortName);
+
+                let ip = port_name.as_ref().and_then(|port| {
+                    parse_ip_candidate(port).or_else(|| Some(port.clone()))
+                });
+
+                Some(PrinterInfo {
+                    name,
+                    ip,
+                    status: Some(format_status(info.Status)),
+                })
+            })
+            .collect())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn pwstr_to_string(ptr: PWSTR) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+
+    unsafe {
+        let mut len = 0usize;
+        while *ptr.0.add(len) != 0 {
+            len += 1;
+        }
+        if len == 0 {
+            return None;
+        }
+        let slice = std::slice::from_raw_parts(ptr.0, len);
+        Some(String::from_utf16_lossy(slice))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn parse_ip_candidate(port: &str) -> Option<String> {
+    let trimmed = port.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == '.' || c == ':')
+        && trimmed.contains('.')
+    {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn format_status(status: u32) -> String {
+    if status == 0 {
+        return "Ready".to_string();
+    }
+
+    let mut flags = Vec::new();
+
+    macro_rules! push_if {
+        ($cond:expr, $label:expr) => {
+            if $cond {
+                flags.push($label);
             }
-        })
-        .collect();
+        };
+    }
 
-    Ok(result)
+    push_if!(status & PRINTER_STATUS_PAUSED != 0, "Paused");
+    push_if!(status & PRINTER_STATUS_PENDING_DELETION != 0, "Pending Deletion");
+    push_if!(status & PRINTER_STATUS_PAPER_PROBLEM != 0, "Paper Problem");
+    push_if!(status & PRINTER_STATUS_MANUAL_FEED != 0, "Manual Feed");
+    push_if!(status & PRINTER_STATUS_PAPER_JAM != 0, "Paper Jam");
+    push_if!(status & PRINTER_STATUS_PAPER_OUT != 0, "Paper Out");
+    push_if!(status & PRINTER_STATUS_OFFLINE != 0, "Offline");
+    push_if!(status & PRINTER_STATUS_BUSY != 0, "Busy");
+    push_if!(status & PRINTER_STATUS_DOOR_OPEN != 0, "Door Open");
+    push_if!(status & PRINTER_STATUS_ERROR != 0, "Error");
+    push_if!(status & PRINTER_STATUS_INITIALIZING != 0, "Initializing");
+    push_if!(status & PRINTER_STATUS_PRINTING != 0, "Printing");
+    push_if!(status & PRINTER_STATUS_PROCESSING != 0, "Processing");
+    push_if!(status & PRINTER_STATUS_OUT_OF_MEMORY != 0, "Out of Memory");
+    push_if!(status & PRINTER_STATUS_NO_TONER != 0, "No Toner");
+    push_if!(status & PRINTER_STATUS_TONER_LOW != 0, "Toner Low");
+    push_if!(status & PRINTER_STATUS_OUTPUT_BIN_FULL != 0, "Output Bin Full");
+    push_if!(status & PRINTER_STATUS_WAITING != 0, "Waiting");
+    push_if!(status & PRINTER_STATUS_WARMING_UP != 0, "Warming Up");
+    push_if!(status & PRINTER_STATUS_POWER_SAVE != 0, "Power Save");
+    push_if!(
+        status & PRINTER_STATUS_SERVER_UNKNOWN != 0,
+        "Server Unknown"
+    );
+    push_if!(status & PRINTER_STATUS_SERVER_OFFLINE != 0, "Server Offline");
+    push_if!(status & PRINTER_STATUS_USER_INTERVENTION != 0, "User Action");
+    push_if!(
+        status & PRINTER_STATUS_DRIVER_UPDATE_NEEDED != 0,
+        "Driver Update Needed"
+    );
+    push_if!(status & PRINTER_STATUS_PAGE_PUNT != 0, "Page Punt");
+    push_if!(status & PRINTER_STATUS_NOT_AVAILABLE != 0, "Not Available");
+    push_if!(status & PRINTER_STATUS_IO_ACTIVE != 0, "I/O Active");
+
+    if flags.is_empty() {
+        format!("0x{status:08X}")
+    } else {
+        flags.join(", ")
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
