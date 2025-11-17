@@ -546,7 +546,6 @@ function App() {
                               {printers.map((p) => (
                                 <option key={p.name} value={p.name}>
                                   {p.name}
-                                  {p.ip ? ` (${p.ip})` : ""}
                                 </option>
                               ))}
                             </select>
