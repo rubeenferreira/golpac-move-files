@@ -92,7 +92,7 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
         // First call to determine required buffer size (it will return ERROR_INSUFFICIENT_BUFFER).
         let _ = EnumPrintersW(
             flags,
-            None::<PCWSTR>,
+            PCWSTR::null(),
             2,
             None,
             &mut needed,
@@ -106,7 +106,7 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
         let mut buffer = vec![0u8; needed as usize];
         EnumPrintersW(
             flags,
-            None::<PCWSTR>,
+            PCWSTR::null(),
             2,
             Some(buffer.as_mut_slice()),
             &mut needed,
