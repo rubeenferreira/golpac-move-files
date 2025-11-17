@@ -1,12 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use tauri::WindowEvent;
-
-// For PNG encoding + base64
-use image::codecs::png::PngEncoder;
-use image::ColorType;
-use std::io::Cursor;
 
 //
 // ───────── System info ─────────
@@ -24,7 +20,7 @@ struct SystemInfo {
 fn get_system_info() -> SystemInfo {
     use local_ip_address::local_ip;
 
-    let hostname = whoami::hostname();
+    let hostname = whoami::fallible::hostname().unwrap_or_else(|_| "Unknown".to_string());
     let username = whoami::username();
     let os_version = format!("{} {}", whoami::platform(), whoami::distro());
     let ipv4 = local_ip()
@@ -55,6 +51,11 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
     use serde::Deserialize;
     use serde_json;
     use std::process::Command;
+    use std::os::windows::process::CommandExt;
+
+    // Hide PowerShell window completely
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    const DETACHED_PROCESS: u32 = 0x00000008;
 
     #[derive(Deserialize)]
     struct PsPrinter {
@@ -66,8 +67,8 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
         printer_status: Option<serde_json::Value>,
     }
 
-    // PowerShell → JSON
     let output = Command::new("powershell")
+        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
         .args([
             "-Command",
             "Get-Printer | Select-Object Name,PortName,PrinterStatus | ConvertTo-Json -Depth 2",
@@ -89,7 +90,6 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
         return Ok(Vec::new());
     }
 
-    // ConvertTo-Json returns either an array or a single object
     let printers: Vec<PsPrinter> = match serde_json::from_str(trimmed) {
         Ok(v) => v,
         Err(_) => {
@@ -102,13 +102,11 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
     let result = printers
         .into_iter()
         .map(|p| {
-            // PrinterStatus may be a number or string
             let status = p.printer_status.map(|v| {
                 let s = v.to_string();
                 s.trim_matches('"').to_string()
             });
 
-            // Treat PortName that looks like an IP / host:port as "ip"
             let ip = p.port_name.as_ref().and_then(|port| {
                 let t = port.trim();
                 if t.chars()
@@ -134,11 +132,9 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
 
 #[cfg(not(target_os = "windows"))]
 fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
-    // For now: no printer info on macOS/Linux
     Ok(Vec::new())
 }
 
-/// Async command so the UI doesn't freeze while PowerShell runs.
 #[tauri::command]
 async fn get_printers() -> Result<Vec<PrinterInfo>, String> {
     tauri::async_runtime::spawn_blocking(|| get_printers_impl())
@@ -151,39 +147,35 @@ async fn get_printers() -> Result<Vec<PrinterInfo>, String> {
 //
 
 #[tauri::command]
-fn capture_screenshot() -> Result<String, String> {
+async fn capture_screenshot() -> Result<String, String> {
+    use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
     use screenshots::Screen;
 
-    // 1) Pick first screen
-    let screens = Screen::all().map_err(|e| format!("Failed to list screens: {e}"))?;
-    let screen = screens
-        .into_iter()
-        .next()
-        .ok_or_else(|| "No screen available for capture".to_string())?;
+    let screens = Screen::all().map_err(|e| format!("Failed to enumerate screens: {e}"))?;
+    if screens.is_empty() {
+        return Err("No screens detected".to_string());
+    }
 
-    // 2) Capture screen to an ImageBuffer (RGBA)
-    let image = screen
+    // For now: capture primary / first screen
+    let screen = &screens[0];
+
+    let raw = screen
         .capture()
-        .map_err(|e| format!("Failed to capture screen: {e}"))?;
+        .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
 
-    // 3) Get dimensions and raw RGBA bytes
-    let (width, height) = image.dimensions();
-    let raw = image.into_raw(); // Vec<u8> RGBA
+    let width = raw.width();
+    let height = raw.height();
+    let pixels = raw.into_vec();
 
-    // 4) Encode as PNG in-memory
-    let mut png_data: Vec<u8> = Vec::new();
+    let mut png_bytes = Vec::new();
     {
-        let mut cursor = Cursor::new(&mut png_data);
-        let encoder = PngEncoder::new(&mut cursor);
-
+        let encoder = PngEncoder::new(&mut png_bytes);
         encoder
-            .encode(&raw, width, height, ColorType::Rgba8)
+            .write_image(&pixels, width, height, ColorType::Rgba8.into())
             .map_err(|e| format!("Failed to encode PNG: {e}"))?;
     }
 
-    // 5) Return base64 PNG string to the frontend
-    let base64_png = base64::encode(&png_data);
-    Ok(base64_png)
+    Ok(general_purpose::STANDARD.encode(png_bytes))
 }
 
 //
@@ -197,12 +189,11 @@ fn main() {
             get_printers,
             capture_screenshot
         ])
-        // When user clicks the X, hide the window instead of quitting
+        // Close button → hide window (app keeps running)
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // Hide window (acts like "minimize to tray" when we have a tray icon)
-                let _ = window.hide();
                 api.prevent_close();
+                let _ = window.hide();
             }
         })
         .run(tauri::generate_context!())
