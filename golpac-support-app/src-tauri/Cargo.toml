@@ -23,5 +23,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 whoami = "1.5"
 local-ip-address = "0.5"
+screenshots = "0.8"
+image = { version = "0.24", features = ["png"] }
+base64 = "0.22"
 
 

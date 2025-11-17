@@ -40,44 +40,6 @@ type PrinterCache = {
   updatedAt: string;
 };
 
-// --- tray helper -----------------------------------------------------------
-
-async function setupTray() {
-  try {
-    const win = getCurrentWindow();
-
-    // 1) Menu
-    const menu = await Menu.new({
-      items: [
-        { id: "show", text: "Show Golpac Support" },
-        { id: "quit", text: "Quit" },
-      ],
-    });
-
-    // 2) Tray icon  ✅ Cast to `any` to silence the TS type error
-    const tray = (await TrayIcon.new({
-      id: "golpac-tray",
-      menu,
-      tooltip: "Golpac Support",
-    })) as any;
-
-    // 3) Handle menu clicks
-    tray.onMenuItemClick(async (event: { id: string }) => {
-      if (event.id === "show") {
-        await win.show();
-        await win.setFocus();
-      } else if (event.id === "quit") {
-        await win.close();
-      }
-    });
-
-    console.log("Tray icon set up");
-  } catch (err) {
-    console.error("Failed to set up tray:", err);
-  }
-}
-
-
 function App() {
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -106,14 +68,65 @@ function App() {
   const [screenshotCapturing, setScreenshotCapturing] = useState(false);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
 
-  // --- Load app version & set up tray once --------------------------------
+  // ───────────────── Tray & close behaviour ─────────────────
+  useEffect(() => {
+    const win = getCurrentWindow();
+
+    let unlistenPromise: Promise<() => void> | null = null;
+
+    (async () => {
+      // 1) Intercept close: hide instead of quitting (Rust side also hides)
+      unlistenPromise = win.onCloseRequested((event) => {
+        event.preventDefault();
+        win.hide();
+      });
+
+      try {
+        // 2) Tray menu
+        const menu = await Menu.new({
+          items: [
+            { id: "show", text: "Show Golpac Support" },
+            { id: "quit", text: "Quit" },
+          ],
+        });
+
+        // 3) Tray icon
+        const tray = await TrayIcon.new({
+          id: "golpac-tray",
+          menu,
+          tooltip: "Golpac Support",
+        });
+
+        // 4) Handle menu clicks.
+        // Tauri's type defs don't have this yet, but it exists at runtime.
+        // @ts-expect-error onMenuItemClick is available at runtime
+        tray.onMenuItemClick(async (event: { id: string }) => {
+          if (event.id === "show") {
+            await win.show();
+            await win.setFocus();
+          } else if (event.id === "quit") {
+            await win.close(); // will really quit
+          }
+        });
+      } catch (err) {
+        console.error("Failed to set up tray:", err);
+      }
+    })();
+
+    return () => {
+      if (unlistenPromise) {
+        unlistenPromise
+          .then((unlisten) => unlisten())
+          .catch(() => {});
+      }
+    };
+  }, []);
+
+  // --- Load app version ----------------------------------------------------
   useEffect(() => {
     getVersion()
       .then((v) => setAppVersion(v))
       .catch((err) => console.error("Failed to get app version:", err));
-
-    // tray icon (safe on mac & windows)
-    setupTray();
   }, []);
 
   // --- Load saved preferences (email + urgency + category) -----------------
@@ -170,7 +183,7 @@ function App() {
     }
   }
 
-  // --- Load printers from cache OR invoke command --------------------------
+  // ───────────────── Printer helpers ─────────────────
 
   function loadPrintersFromCache() {
     if (typeof window === "undefined") return false;
@@ -251,12 +264,11 @@ function App() {
     }
   }
 
-  // When category switches to Printers, load cache first, then refresh -------
+  // ⬇️ When switching to "Printers", ONLY load from cache.
+  // We do NOT auto-refresh → no PowerShell / cmd window on startup.
   useEffect(() => {
     if (category !== "Printers") return;
-
-    const hadCache = loadPrintersFromCache();
-    loadPrinters(!hadCache);
+    loadPrintersFromCache();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category]);
 
@@ -270,7 +282,8 @@ function App() {
     setSelectedPrinter(found);
   }, [selectedPrinterName, printers]);
 
-  // --- Screenshot capture --------------------------------------------------
+  // ───────────────── Screenshot capture ─────────────────
+
   async function handleCaptureScreenshot() {
     setScreenshotCapturing(true);
     setScreenshotError(null);
@@ -290,7 +303,8 @@ function App() {
     }
   }
 
-  // --- Form submission -----------------------------------------------------
+  // ───────────────── Form submission ─────────────────
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!subject.trim() || !description.trim()) return;
@@ -314,6 +328,7 @@ function App() {
 
       const createdAt = new Date().toISOString();
 
+      // Build printerInfo string only when category is Printers
       let printerInfo: string | null = null;
       if (category === "Printers" && selectedPrinter) {
         const parts: string[] = [`Name: ${selectedPrinter.name}`];
@@ -391,6 +406,7 @@ function App() {
         }
       }
 
+      // Clear ticket-specific fields
       setSubject("");
       setDescription("");
       setScreenshot(null);
@@ -423,7 +439,8 @@ function App() {
     }
   }
 
-  // --- UI ------------------------------------------------------------------
+  // ───────────────── UI ─────────────────
+
   return (
     <div className="app-root">
       <div className="shell">

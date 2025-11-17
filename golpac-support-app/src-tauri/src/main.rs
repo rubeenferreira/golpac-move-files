@@ -3,6 +3,11 @@
 use serde::Serialize;
 use tauri::WindowEvent;
 
+// For PNG encoding + base64
+use image::codecs::png::PngEncoder;
+use image::ColorType;
+use std::io::Cursor;
+
 //
 // ───────── System info ─────────
 //
@@ -142,16 +147,60 @@ async fn get_printers() -> Result<Vec<PrinterInfo>, String> {
 }
 
 //
+// ───────── Screenshot capture ─────────
+//
+
+#[tauri::command]
+fn capture_screenshot() -> Result<String, String> {
+    use screenshots::Screen;
+
+    // 1) Pick first screen
+    let screens = Screen::all().map_err(|e| format!("Failed to list screens: {e}"))?;
+    let screen = screens
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No screen available for capture".to_string())?;
+
+    // 2) Capture screen to an ImageBuffer (RGBA)
+    let image = screen
+        .capture()
+        .map_err(|e| format!("Failed to capture screen: {e}"))?;
+
+    // 3) Get dimensions and raw RGBA bytes
+    let (width, height) = image.dimensions();
+    let raw = image.into_raw(); // Vec<u8> RGBA
+
+    // 4) Encode as PNG in-memory
+    let mut png_data: Vec<u8> = Vec::new();
+    {
+        let mut cursor = Cursor::new(&mut png_data);
+        let encoder = PngEncoder::new(&mut cursor);
+
+        encoder
+            .encode(&raw, width, height, ColorType::Rgba8)
+            .map_err(|e| format!("Failed to encode PNG: {e}"))?;
+    }
+
+    // 5) Return base64 PNG string to the frontend
+    let base64_png = base64::encode(&png_data);
+    Ok(base64_png)
+}
+
+//
 // ───────── Tauri main ─────────
 //
 
 fn main() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_info, get_printers])
-        // On Windows: clicking X hides window to tray instead of quitting.
+        .invoke_handler(tauri::generate_handler![
+            get_system_info,
+            get_printers,
+            capture_screenshot
+        ])
+        // When user clicks the X, hide the window instead of quitting
         .on_window_event(|window, event| {
-            #[cfg(target_os = "windows")]
             if let WindowEvent::CloseRequested { api, .. } = event {
+                // Hide window (acts like "minimize to tray" when we have a tray icon)
                 let _ = window.hide();
                 api.prevent_close();
             }
