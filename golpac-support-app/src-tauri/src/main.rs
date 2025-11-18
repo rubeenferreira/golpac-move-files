@@ -313,15 +313,8 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
     let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
     let _ = clipboard.clear();
 
-    Command::new("powershell")
-        .args([
-            "-NoLogo",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-Command",
-            "Start-Process -FilePath 'ms-screenclip:' -WindowStyle Hidden",
-        ])
+    Command::new("cmd")
+        .args(["/C", "start", "/B", "ms-screenclip:"])
         .spawn()
         .map_err(|e| format!("Failed to start Snipping Tool: {e}"))?;
 
