@@ -7,7 +7,8 @@ use tauri::WindowEvent;
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
 #[cfg(target_os = "windows")]
-use std::{thread::sleep, time::{Duration, Instant}};
+use std::{
+    os::windows::process::CommandExt,thread::sleep, time::{Duration, Instant}};
 #[cfg(target_os = "windows")]
 use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App, AppHandle, Manager};
 #[cfg(target_os = "windows")]
@@ -351,7 +352,8 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
 fn launch_quick_assist() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::{env, path::PathBuf, process::Command};
+        use std::{
+    os::windows::process::CommandExt,env, path::PathBuf, process::Command};
 
         let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
         let exe_path = PathBuf::from(&system_root)
