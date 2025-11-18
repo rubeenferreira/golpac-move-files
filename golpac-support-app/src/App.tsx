@@ -468,6 +468,7 @@ function App() {
         category,
         printerInfo,
         screenshots,
+        screenshot: screenshots[0] ?? null,
         hostname: systemInfo.hostname,
         username: systemInfo.username,
         osVersion: resolvedOs,
