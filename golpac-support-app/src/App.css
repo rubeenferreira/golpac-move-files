@@ -373,6 +373,14 @@ textarea:focus {
   margin-top: 6px;
 }
 
+.app-context-hint {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
 .quick-assist-inline {
   margin-top: 18px;
   padding: 12px 16px;

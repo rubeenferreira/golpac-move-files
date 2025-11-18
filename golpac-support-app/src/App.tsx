@@ -31,6 +31,25 @@ type PrinterInfo = {
   status?: string | null;
 };
 
+type SystemMetrics = {
+  uptime_seconds: number;
+  uptime_human: string;
+  free_disk_c_gb: number;
+  total_disk_c_gb: number;
+  cpu_usage_percent: number;
+  memory_used_gb: number;
+  memory_total_gb: number;
+  default_gateway?: string | null;
+  gateway_ping_ms?: number | null;
+  public_ip?: string | null;
+  timestamp: string;
+};
+
+type AppContextInfo = {
+  category: string;
+  details?: string | null;
+};
+
 const PREFS_KEY = "golpac-support-preferences";
 const PRINTER_CACHE_KEY = "golpac-printers-cache";
 
@@ -72,6 +91,11 @@ function App() {
   const [screenshotCapturing, setScreenshotCapturing] = useState(false);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(
+    null
+  );
+  const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
+  const [loadingAppContext, setLoadingAppContext] = useState(false);
 
   const initialOffline =
     typeof navigator !== "undefined" ? !navigator.onLine : false;
@@ -169,6 +193,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    loadSystemMetrics();
+  }, []);
+
+  useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<boolean>("network-status", (event) => {
       setIsOffline(!event.payload);
@@ -213,6 +241,15 @@ function App() {
       })();
     }
   }, [showOfflineDialog, offlineDismissed]);
+
+  useEffect(() => {
+    const cat = category.trim().toLowerCase();
+    if (cat === "sage 300" || cat === "adobe" || cat === "office 365" || cat === "email") {
+      refreshAppContext(category);
+    } else {
+      setAppContextDetails(null);
+    }
+  }, [category]);
 
   // --- System info ---------------------------------------------------------
   async function loadSystemInfo(): Promise<SystemInfo> {
@@ -422,6 +459,30 @@ function App() {
     }
   }
 
+  async function loadSystemMetrics() {
+    try {
+      const metrics = (await invoke("get_system_metrics")) as SystemMetrics;
+      setSystemMetrics(metrics);
+    } catch (err) {
+      console.error("Failed to load system metrics:", err);
+    }
+  }
+
+  async function refreshAppContext(selectedCategory: string) {
+    setLoadingAppContext(true);
+    try {
+      const info = (await invoke("get_app_context", {
+        category: selectedCategory,
+      })) as AppContextInfo;
+      setAppContextDetails(info.details || null);
+    } catch (err) {
+      console.error("Failed to load app context:", err);
+      setAppContextDetails(null);
+    } finally {
+      setLoadingAppContext(false);
+    }
+  }
+
   // --- Form submission -----------------------------------------------------
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -469,6 +530,8 @@ function App() {
         printerInfo,
         screenshots,
         screenshot: screenshots[0] ?? null,
+        systemMetrics,
+        appContext: appContextDetails,
         hostname: systemInfo.hostname,
         username: systemInfo.username,
         osVersion: resolvedOs,
@@ -634,11 +697,11 @@ function App() {
                 </div>
               </label>
 
-              {category === "Printers" && (
-                <div className="printer-panel">
-                  <small className="field-hint">
-                    Select the printer you’re having issues with.
-                  </small>
+            {category === "Printers" && (
+              <div className="printer-panel">
+                <small className="field-hint">
+                  Select the printer you’re having issues with.
+                </small>
 
                   <div className="printer-panel-body">
                     {printersLoading && (
@@ -702,6 +765,19 @@ function App() {
                 </div>
               )}
             </div>
+
+            {(loadingAppContext || appContextDetails) && (
+              <div className="app-context-hint">
+                {loadingAppContext ? (
+                  <small>Gathering app context...</small>
+                ) : (
+                  <small>
+                    <strong>App context:</strong>{" "}
+                    {appContextDetails || "Not available"}
+                  </small>
+                )}
+              </div>
+            )}
 
             <label className="field field-narrow">
               <span>Subject</span>

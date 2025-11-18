@@ -1,13 +1,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use base64::{engine::general_purpose, Engine as _};
+use chrono::Utc;
+use reqwest::blocking::Client;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     thread::sleep,
     time::Duration,
 };
+use sysinfo::{CpuExt, DiskExt, System, SystemExt};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
@@ -66,6 +69,27 @@ struct SystemInfo {
     username: String,
     os_version: String,
     ipv4: String,
+}
+
+#[derive(Serialize, Default)]
+struct SystemMetrics {
+    uptime_seconds: u64,
+    uptime_human: String,
+    free_disk_c_gb: f64,
+    total_disk_c_gb: f64,
+    cpu_usage_percent: f32,
+    memory_used_gb: f64,
+    memory_total_gb: f64,
+    default_gateway: Option<String>,
+    gateway_ping_ms: Option<f64>,
+    public_ip: Option<String>,
+    timestamp: String,
+}
+
+#[derive(Serialize)]
+struct AppContextInfo {
+    category: String,
+    details: Option<String>,
 }
 
 #[tauri::command]
@@ -409,6 +433,76 @@ fn restore_window(window: &tauri::Window) {
 }
 
 #[tauri::command]
+fn get_system_metrics() -> Result<SystemMetrics, String> {
+    let mut system = System::new_all();
+    system.refresh_memory();
+    system.refresh_disks();
+    system.refresh_cpu();
+    sleep(Duration::from_millis(250));
+    system.refresh_cpu();
+
+    let uptime = system.uptime();
+    let uptime_human = format_duration(uptime);
+
+    let mut free_disk_c = 0f64;
+    let mut total_disk_c = 0f64;
+    for disk in system.disks() {
+        let mount = disk.mount_point().to_string_lossy().to_string();
+        if mount.to_uppercase().starts_with("C:") {
+            free_disk_c = bytes_to_gb(disk.available_space());
+            total_disk_c = bytes_to_gb(disk.total_space());
+            break;
+        }
+    }
+
+    let cpu_usage = system.global_cpu_info().cpu_usage();
+    let total_mem = system.total_memory();
+    let used_mem = system.used_memory();
+    let memory_total_gb = kib_to_gb(total_mem);
+    let memory_used_gb = kib_to_gb(used_mem);
+
+    let gateway = default_gateway();
+    let ping = gateway
+        .as_ref()
+        .and_then(|g| ping_gateway(g));
+
+    let public_ip = fetch_public_ip();
+
+    Ok(SystemMetrics {
+        uptime_seconds: uptime,
+        uptime_human,
+        free_disk_c_gb: free_disk_c,
+        total_disk_c_gb: total_disk_c,
+        cpu_usage_percent: cpu_usage,
+        memory_used_gb,
+        memory_total_gb,
+        default_gateway: gateway,
+        gateway_ping_ms: ping,
+        public_ip,
+        timestamp: Utc::now().to_rfc3339(),
+    })
+}
+
+#[tauri::command]
+fn get_app_context(category: String) -> Result<AppContextInfo, String> {
+    let normalized = category.trim().to_lowercase();
+    let details = match normalized.as_str() {
+        #[cfg(target_os = "windows")]
+        "sage 300" => gather_sage_context().ok(),
+        #[cfg(target_os = "windows")]
+        "adobe" => gather_adobe_context().ok(),
+        #[cfg(target_os = "windows")]
+        "office 365" | "email" => gather_office_context().ok(),
+        _ => None,
+    };
+
+    Ok(AppContextInfo {
+        category,
+        details,
+    })
+}
+
+#[tauri::command]
 fn launch_quick_assist() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -491,6 +585,190 @@ fn check_online() -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
 }
 
+fn format_duration(seconds: u64) -> String {
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if days > 0 {
+        format!("{}d {}h {}m", days, hours, minutes)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else {
+        format!("{}m", minutes)
+    }
+}
+
+fn bytes_to_gb(bytes: u64) -> f64 {
+    bytes as f64 / 1024.0 / 1024.0 / 1024.0
+}
+
+fn kib_to_gb(kib: u64) -> f64 {
+    kib as f64 / 1024.0 / 1024.0
+}
+
+#[cfg(target_os = "windows")]
+fn default_gateway() -> Option<String> {
+    use std::process::Command;
+    let script = r#"
+$route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric | Select-Object -First 1
+if ($route) { $route.NextHop }
+"#;
+    Command::new("powershell")
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                    .filter(|s| !s.is_empty())
+            } else {
+                None
+            }
+        })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn default_gateway() -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn ping_gateway(gateway: &str) -> Option<f64> {
+    use std::process::Command;
+    let output = Command::new("cmd")
+        .args(["/C", "ping", "-n", "1", gateway])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(idx) = line.find("time=") {
+            let part = &line[idx + 5..];
+            let ms_part = part.split_whitespace().next().unwrap_or("");
+            let cleaned = ms_part.trim_end_matches("ms");
+            if let Ok(value) = cleaned.parse::<f64>() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ping_gateway(_gateway: &str) -> Option<f64> {
+    None
+}
+
+fn fetch_public_ip() -> Option<String> {
+    Client::builder()
+        .timeout(Duration::from_secs(4))
+        .build()
+        .ok()?
+        .get("https://api.ipify.org")
+        .send()
+        .ok()?
+        .text()
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+}
+
+#[cfg(target_os = "windows")]
+fn gather_sage_context() -> Result<String, String> {
+    let script = r#"
+$paths = @(
+  'HKLM:\SOFTWARE\ACCPAC International, Inc.\ACCPAC\Configuration',
+  'HKLM:\SOFTWARE\WOW6432Node\ACCPAC International, Inc.\ACCPAC\Configuration'
+)
+foreach ($p in $paths) {
+  if (Test-Path $p) {
+    $item = Get-ItemProperty -Path $p -ErrorAction SilentlyContinue
+    if ($item) {
+      [PSCustomObject]@{
+        Version = $item.Version
+        SharedData = $item.SharedData
+      } | ConvertTo-Json -Compress
+      break
+    }
+  }
+}
+"#;
+    powershell_output(script)
+}
+
+#[cfg(target_os = "windows")]
+fn gather_adobe_context() -> Result<String, String> {
+    let script = r#"
+$roots = @(
+  'HKLM:\SOFTWARE\Adobe',
+  'HKLM:\SOFTWARE\WOW6432Node\Adobe'
+)
+foreach ($root in $roots) {
+  if (Test-Path $root) {
+    $sub = Get-ChildItem $root | Where-Object { $_.PSChildName -like 'Acrobat*' } | Select-Object -First 1
+    if ($sub) {
+      $item = Get-ItemProperty $sub.PSPath
+      [PSCustomObject]@{
+        Product = $sub.PSChildName
+        Version = $item.Version
+      } | ConvertTo-Json -Compress
+      break
+    }
+  }
+}
+"#;
+    powershell_output(script)
+}
+
+#[cfg(target_os = "windows")]
+fn gather_office_context() -> Result<String, String> {
+    let script = r#"
+$configPath = 'HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration'
+$profilePath = 'HKCU:\Software\Microsoft\Office\16.0\Outlook'
+$obj = [ordered]@{}
+if (Test-Path $configPath) {
+  $item = Get-ItemProperty $configPath -ErrorAction SilentlyContinue
+  if ($item) {
+    $obj.Version = $item.VersionToReport
+    $obj.Product = $item.ProductReleaseIds
+  }
+}
+if (Test-Path $profilePath) {
+  $p = Get-ItemProperty $profilePath -ErrorAction SilentlyContinue
+  if ($p) {
+    $obj.DefaultProfile = $p.DefaultProfile
+  }
+}
+if ($obj.Keys.Count -gt 0) {
+  $obj | ConvertTo-Json -Compress
+}
+"#;
+    powershell_output(script)
+}
+
+#[cfg(target_os = "windows")]
+fn powershell_output(script: &str) -> Result<String, String> {
+    use std::process::Command;
+    let output = Command::new("powershell")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr)
+            .trim()
+            .to_string())
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
     let tray_menu = MenuBuilder::new(app)
@@ -537,7 +815,9 @@ fn main() {
             get_system_info,
             get_printers,
             capture_screenshot,
-            launch_quick_assist
+            launch_quick_assist,
+            get_system_metrics,
+            get_app_context
         ])
         .setup(|app| {
             #[cfg(not(target_os = "windows"))]
