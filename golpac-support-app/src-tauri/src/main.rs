@@ -316,6 +316,7 @@ fn capture_screenshot_standard() -> Result<String, String> {
 #[cfg(target_os = "windows")]
 fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
     let _ = window.hide();
+    std::thread::sleep(std::time::Duration::from_millis(150));
 
     let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
     let _ = clipboard.clear();
