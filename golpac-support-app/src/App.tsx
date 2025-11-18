@@ -1,6 +1,7 @@
 import { useEffect, useState, FormEvent, useRef } from "react";
 import "./App.css";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import golpacLogo from "./assets/golpac-logo.png";
@@ -164,6 +165,16 @@ function App() {
     return () => {
       window.removeEventListener("online", updateStatus);
       window.removeEventListener("offline", updateStatus);
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<boolean>("network-status", (event) => {
+      setIsOffline(!event.payload);
+    }).then((fn) => (unlisten = fn));
+    return () => {
+      if (unlisten) unlisten();
     };
   }, []);
 

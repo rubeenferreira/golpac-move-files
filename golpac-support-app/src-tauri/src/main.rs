@@ -2,7 +2,12 @@
 
 use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
-use tauri::WindowEvent;
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use std::{
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
+    thread::sleep,
+    time::Duration,
+};
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
@@ -12,11 +17,10 @@ use std::{
     os::windows::process::CommandExt,
     path::PathBuf,
     process::Command,
-    thread::sleep,
-    time::{Duration, Instant},
+    time::Instant,
 };
 #[cfg(target_os = "windows")]
-use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App, AppHandle, Manager};
+use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App};
 #[cfg(target_os = "windows")]
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 #[cfg(target_os = "windows")]
@@ -48,7 +52,6 @@ const TRAY_TOOLTIP: &str = "Golpac Support";
 const NOTIFICATION_TITLE: &str = "Golpac Support";
 #[cfg(target_os = "windows")]
 const NOTIFICATION_BODY: &str = "Golpac Support Application is still running in the background.";
-#[cfg(target_os = "windows")]
 const MAIN_WINDOW_LABEL: &str = "main";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -458,12 +461,34 @@ fn show_background_notification(app_handle: &AppHandle) {
         .show();
 }
 
-#[cfg(target_os = "windows")]
 fn reveal_main_window(app_handle: &AppHandle) {
     if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+fn monitor_network(app_handle: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last_state: Option<bool> = None;
+        loop {
+            let online = check_online();
+            let changed = last_state.map(|state| state != online).unwrap_or(true);
+            if changed {
+                last_state = Some(online);
+                let _ = app_handle.emit("network-status", online);
+                if !online {
+                    reveal_main_window(&app_handle);
+                }
+            }
+            sleep(Duration::from_secs(5));
+        }
+    });
+}
+
+fn check_online() -> bool {
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(1, 1, 1, 1), 53));
+    TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
 }
 
 #[cfg(target_os = "windows")]
@@ -523,6 +548,7 @@ fn main() {
                 setup_windows_tray(app)?;
                 ensure_notification_permission(&app.handle());
             }
+            monitor_network(app.handle().clone());
 
             Ok(())
         })
