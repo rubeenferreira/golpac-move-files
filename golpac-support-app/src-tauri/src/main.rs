@@ -361,7 +361,7 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
     let width = u32::try_from(image.width).map_err(|_| "Screenshot width unsupported".to_string())?;
     let height =
         u32::try_from(image.height).map_err(|_| "Screenshot height unsupported".to_string())?;
-    let encoded = encode_png_from_rgba(image.bytes.as_ref(), width, height);
+    let encoded = encode_png_from_rgba(image.bytes.as_ref(), width, height)?;
 
     restore_window(&window);
 
