@@ -285,6 +285,24 @@ textarea:focus {
   border: 1px dashed rgba(148, 163, 184, 0.7);
 }
 
+.btn-outline-light {
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.85);
+  background: #f8fafc;
+  color: #1d4ed8;
+  font-weight: 600;
+  padding: 8px 20px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.3);
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.btn-outline-light:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.4);
+}
+
 .secondary-btn:disabled {
   opacity: 0.7;
   cursor: default;

@@ -301,7 +301,7 @@ fn launch_quick_assist() -> Result<(), String> {
         }
 
         Command::new("cmd")
-            .args(["/C", "start", "", "quickassist"])
+            .args(["/C", "start", "", "ms-quick-assist:"])
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to start Quick Assist: {e}"))

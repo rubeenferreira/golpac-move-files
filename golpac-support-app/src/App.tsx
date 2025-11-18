@@ -669,7 +669,7 @@ function App() {
                 >
                   <button
                     type="button"
-                    className="secondary-btn"
+                    className="btn-outline-light"
                     onClick={handleConnectQuickAssist}
                     disabled={quickAssistLaunching}
                   >
