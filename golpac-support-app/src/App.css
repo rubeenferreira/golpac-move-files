@@ -149,8 +149,12 @@ body {
 
 .form-row.two-col {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
   gap: 12px;
+}
+
+.form-row.two-col.with-printers {
+  align-items: flex-start;
 }
 
 .field {
@@ -160,8 +164,16 @@ body {
   font-size: 13px;
 }
 
+.field.field-narrow {
+  max-width: 620px;
+}
+
 .field span {
   color: var(--text-muted);
+}
+
+.field.printer-category {
+  margin-bottom: 0;
 }
 
 /* Inputs */
@@ -306,6 +318,53 @@ textarea:focus {
 .secondary-btn:disabled {
   opacity: 0.7;
   cursor: default;
+}
+
+.printer-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  padding: 2px 0 0;
+}
+
+.printer-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.printer-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.quick-assist-inline {
+  margin-top: 18px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 14px;
+}
+
+.quick-assist-inline strong {
+  color: #f8fafc;
+}
+
+.submit-row {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  position: sticky;
+  bottom: 14px;
+  padding-bottom: 4px;
 }
 
 /* Status messages */

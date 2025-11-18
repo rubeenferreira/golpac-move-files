@@ -60,7 +60,6 @@ function App() {
   const [printersLastUpdated, setPrintersLastUpdated] = useState<string | null>(
     null
   );
-  const [quickAssistCode, setQuickAssistCode] = useState("");
   const [quickAssistFeedback, setQuickAssistFeedback] = useState<string | null>(
     null
   );
@@ -130,25 +129,13 @@ function App() {
       const prefs = JSON.parse(raw) as {
         userEmail?: string;
         urgency?: Urgency;
-        category?: Category;
       };
 
       if (prefs.userEmail) setUserEmail(prefs.userEmail);
       if (prefs.urgency && ["Low", "Normal", "High"].includes(prefs.urgency)) {
         setUrgency(prefs.urgency);
       }
-      const categories: Category[] = [
-        "General",
-        "Printers",
-        "Sage 300",
-        "Adobe",
-        "Office 365",
-        "Email",
-        "Other",
-      ];
-      if (prefs.category && categories.includes(prefs.category)) {
-        setCategory(prefs.category);
-      }
+      setCategory("General");
     } catch (err) {
       console.error("Failed to load saved preferences:", err);
     }
@@ -271,34 +258,14 @@ function App() {
   }, [selectedPrinterName, printers]);
 
   async function handleConnectQuickAssist() {
-    const trimmed = quickAssistCode.trim();
-    if (!trimmed) {
-      setQuickAssistError("Enter the security code we provide first.");
-      setQuickAssistFeedback(null);
-      return;
-    }
-
     setQuickAssistLaunching(true);
     setQuickAssistFeedback(null);
     setQuickAssistError(null);
 
     try {
-      if (
-        typeof navigator !== "undefined" &&
-        navigator.clipboard &&
-        typeof navigator.clipboard.writeText === "function"
-      ) {
-        try {
-          await navigator.clipboard.writeText(trimmed);
-          setQuickAssistFeedback("Code copied. Quick Assist will open shortly.");
-        } catch (copyErr) {
-          console.warn("Could not copy Quick Assist code:", copyErr);
-        }
-      }
-
       await invoke("launch_quick_assist");
       setQuickAssistFeedback(
-        "Quick Assist should open. If you don't see it, press Windows + Ctrl + Q and paste the code."
+        "Quick Assist should open. If you don't see it, press Windows + Ctrl + Q and enter the code we provide."
       );
     } catch (err) {
       console.error("Failed to launch Quick Assist:", err);
@@ -381,7 +348,6 @@ function App() {
         urgency,
         category,
         printerInfo,
-        quickAssistCode: quickAssistCode.trim() || null,
         screenshot,
         hostname: systemInfo.hostname,
         username: systemInfo.username,
@@ -426,11 +392,10 @@ function App() {
 
       if (typeof window !== "undefined") {
         try {
-          const prefs = {
-            userEmail,
-            urgency,
-            category,
-          };
+        const prefs = {
+          userEmail,
+          urgency,
+        };
           window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
         } catch (err) {
           console.error("Failed to save preferences:", err);
@@ -485,8 +450,8 @@ function App() {
 
         <main className="shell-body">
           <form className="form" onSubmit={handleSubmit}>
-            <div className="form-row two-col">
-              <label className="field">
+            <div className={`form-row two-col ${category === "Printers" ? "with-printers" : ""}`}>
+              <label className={`field ${category === "Printers" ? "printer-category" : ""}`}>
                 <span>Your email (optional)</span>
                 <input
                   type="email"
@@ -531,86 +496,78 @@ function App() {
                     <option value="Other">Other</option>
                   </select>
                 </div>
-
-                {category === "Printers" && (
-                  <>
-                    <small className="field-hint">
-                      Select the printer you’re having issues with.
-                    </small>
-
-                    <div style={{ marginTop: 8 }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          marginBottom: 4,
-                        }}
-                      >
-                        <button
-                          type="button"
-                          className="secondary-btn"
-                          style={{ padding: "4px 10px", fontSize: 12 }}
-                          onClick={() => loadPrinters(true)}
-                          disabled={printersLoading}
-                        >
-                          {printersLoading ? "Refreshing…" : "Refresh printers"}
-                        </button>
-                        {printersLastUpdated && (
-                          <small className="field-hint">
-                            Last updated:{" "}
-                            {new Date(printersLastUpdated).toLocaleString()}
-                          </small>
-                        )}
-                      </div>
-
-                      {printersLoading && (
-                        <div className="field-hint">
-                          Loading printers on this computer…
-                        </div>
-                      )}
-
-                      {!printersLoading && printersError && (
-                        <div className="field-hint">
-                          {printersError} You can still describe the printer in
-                          the description box.
-                        </div>
-                      )}
-
-                      {!printersLoading &&
-                        !printersError &&
-                        printers.length === 0 && (
-                          <div className="field-hint">
-                            No printers were detected on this machine. Please
-                            mention the printer name in your description.
-                          </div>
-                        )}
-
-                      {!printersLoading &&
-                        !printersError &&
-                        printers.length > 0 && (
-                          <div className="select-wrapper" style={{ marginTop: 6 }}>
-                            <select
-                              value={selectedPrinterName}
-                              onChange={(e) =>
-                                setSelectedPrinterName(e.target.value)
-                              }
-                            >
-                              {printers.map((p) => (
-                                <option key={p.name} value={p.name}>
-                                  {p.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                    </div>
-                  </>
-                )}
               </label>
+
+              {category === "Printers" && (
+                <div className="printer-panel">
+                  <small className="field-hint">
+                    Select the printer you’re having issues with.
+                  </small>
+
+                  <div className="printer-panel-body">
+                    <div className="printer-panel-actions">
+                      <button
+                        type="button"
+                        className="secondary-btn"
+                        onClick={() => loadPrinters(true)}
+                        disabled={printersLoading}
+                      >
+                        {printersLoading ? "Refreshing…" : "Refresh printers"}
+                      </button>
+                      {printersLastUpdated && (
+                        <small className="field-hint">
+                          Last updated:{" "}
+                          {new Date(printersLastUpdated).toLocaleString()}
+                        </small>
+                      )}
+                    </div>
+
+                    {printersLoading && (
+                      <div className="field-hint">
+                        Loading printers on this computer…
+                      </div>
+                    )}
+
+                    {!printersLoading && printersError && (
+                      <div className="field-hint">
+                        {printersError} You can still describe the printer in
+                        the description box.
+                      </div>
+                    )}
+
+                    {!printersLoading &&
+                      !printersError &&
+                      printers.length === 0 && (
+                        <div className="field-hint">
+                          No printers were detected on this machine. Please
+                          mention the printer name in your description.
+                        </div>
+                      )}
+
+                    {!printersLoading &&
+                      !printersError &&
+                      printers.length > 0 && (
+                        <div className="select-wrapper" style={{ marginTop: 6 }}>
+                          <select
+                            value={selectedPrinterName}
+                            onChange={(e) =>
+                              setSelectedPrinterName(e.target.value)
+                            }
+                          >
+                            {printers.map((p) => (
+                              <option key={p.name} value={p.name}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                  </div>
+                </div>
+              )}
             </div>
 
-            <label className="field">
+            <label className="field field-narrow">
               <span>Subject</span>
               <input
                 type="text"
@@ -621,73 +578,16 @@ function App() {
               />
             </label>
 
-            <label className="field">
+            <label className="field field-narrow">
               <span>Description</span>
               <textarea
-                rows={5}
+                rows={4}
                 placeholder="Describe the issue..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 required
               />
             </label>
-
-            <section className="quick-assist-box">
-              <div className="quick-assist-header">
-                <strong>Need remote help?</strong>
-                <span>Use Microsoft Quick Assist so we can connect.</span>
-              </div>
-              <p className="field-hint" style={{ marginTop: 4 }}>
-                Enter the 6-digit code we provide, then select Connect via Quick Assist.
-              </p>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                  marginTop: 8,
-                }}
-              >
-                <input
-                  type="text"
-                  placeholder="Enter the Quick Assist code"
-                  value={quickAssistCode}
-                  onChange={(e) => {
-                    setQuickAssistCode(e.target.value);
-                    setQuickAssistError(null);
-                    setQuickAssistFeedback(null);
-                  }}
-                  maxLength={25}
-                  style={{ fontFamily: "var(--font-mono, 'Courier New', monospace)" }}
-                />
-                <div
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="btn-outline-light"
-                    onClick={handleConnectQuickAssist}
-                    disabled={quickAssistLaunching}
-                  >
-                    {quickAssistLaunching ? "Connecting…" : "Connect via Quick Assist"}
-                  </button>
-                </div>
-                {quickAssistFeedback && (
-                  <div className="field-hint" style={{ color: "#2f855a" }}>
-                    {quickAssistFeedback}
-                  </div>
-                )}
-                {quickAssistError && (
-                  <div className="field-hint" style={{ color: "#c53030" }}>
-                    {quickAssistError}
-                  </div>
-                )}
-              </div>
-            </section>
 
             <div className="actions-row">
               <button
@@ -701,10 +601,6 @@ function App() {
                   : screenshot
                   ? "Retake screenshot"
                   : "📸 Add screenshot"}
-              </button>
-
-              <button type="submit" className="primary-btn" disabled={sending}>
-                {sending ? "Sending…" : "Send to IT"}
               </button>
             </div>
 
@@ -737,11 +633,43 @@ function App() {
               </div>
             )}
 
+            <div className="quick-assist-inline">
+              <div>
+                <strong>Need remote help?</strong>{" "}
+                <span>Use Microsoft Quick Assist so we can connect.</span>
+              </div>
+              <button
+                type="button"
+                className="btn-outline-light"
+                onClick={handleConnectQuickAssist}
+                disabled={quickAssistLaunching}
+              >
+                {quickAssistLaunching ? "Connecting…" : "Connect via Quick Assist"}
+              </button>
+            </div>
+
+            {quickAssistFeedback && (
+              <div className="field-hint" style={{ color: "#2f855a" }}>
+                {quickAssistFeedback}
+              </div>
+            )}
+            {quickAssistError && (
+              <div className="field-hint" style={{ color: "#c53030" }}>
+                {quickAssistError}
+              </div>
+            )}
+
+            <div className="submit-row">
+              <button type="submit" className="primary-btn" disabled={sending}>
+                {sending ? "Sending…" : "Send to IT"}
+              </button>
+            </div>
+
             <div className="meta">
               <small>App version: {appVersion}</small>
             </div>
-          </form>
-        </main>
+         </form>
+       </main>
 
         <footer className="shell-footer">
           <span>Golpac LLC</span>

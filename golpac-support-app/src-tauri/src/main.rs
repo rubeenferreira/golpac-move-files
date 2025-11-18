@@ -5,6 +5,10 @@ use serde::Serialize;
 use tauri::WindowEvent;
 
 #[cfg(target_os = "windows")]
+use arboard::Clipboard;
+#[cfg(target_os = "windows")]
+use std::{thread::sleep, time::{Duration, Instant}};
+#[cfg(target_os = "windows")]
 use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App, AppHandle, Manager};
 #[cfg(target_os = "windows")]
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -250,8 +254,38 @@ async fn get_printers() -> Result<Vec<PrinterInfo>, String> {
 //
 
 #[tauri::command]
-async fn capture_screenshot() -> Result<String, String> {
+async fn capture_screenshot(window: tauri::Window) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let win = window.clone();
+        return tauri::async_runtime::spawn_blocking(move || capture_screenshot_windows(win))
+            .await
+            .map_err(|e| format!("Thread join error: {e}"))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window; // unused
+        return tauri::async_runtime::spawn_blocking(capture_screenshot_standard)
+            .await
+            .map_err(|e| format!("Thread join error: {e}"))?;
+    }
+}
+
+fn encode_png_from_rgba(buffer: &[u8], width: u32, height: u32) -> Result<String, String> {
     use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+    let mut png_bytes = Vec::new();
+    {
+        let encoder = PngEncoder::new(&mut png_bytes);
+        encoder
+            .write_image(buffer, width, height, ColorType::Rgba8.into())
+            .map_err(|e| format!("Failed to encode PNG: {e}"))?;
+    }
+    Ok(general_purpose::STANDARD.encode(png_bytes))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn capture_screenshot_standard() -> Result<String, String> {
     use screenshots::Screen;
 
     let screens = Screen::all().map_err(|e| format!("Failed to enumerate screens: {e}"))?;
@@ -259,9 +293,7 @@ async fn capture_screenshot() -> Result<String, String> {
         return Err("No screens detected".to_string());
     }
 
-    // For now: capture primary / first screen
     let screen = &screens[0];
-
     let raw = screen
         .capture()
         .map_err(|e| format!("Failed to capture screenshot: {e}"))?;
@@ -269,16 +301,57 @@ async fn capture_screenshot() -> Result<String, String> {
     let width = raw.width();
     let height = raw.height();
     let pixels = raw.into_vec();
+    encode_png_from_rgba(&pixels, width, height)
+}
 
-    let mut png_bytes = Vec::new();
-    {
-        let encoder = PngEncoder::new(&mut png_bytes);
-        encoder
-            .write_image(&pixels, width, height, ColorType::Rgba8.into())
-            .map_err(|e| format!("Failed to encode PNG: {e}"))?;
-    }
+#[cfg(target_os = "windows")]
+fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
+    use std::process::Command;
 
-    Ok(general_purpose::STANDARD.encode(png_bytes))
+    let _ = window.hide();
+
+    let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
+    let _ = clipboard.clear();
+
+    Command::new("powershell")
+        .args([
+            "-NoLogo",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            "Start-Process 'ms-screenclip:'",
+        ])
+        .spawn()
+        .map_err(|e| format!("Failed to start Snipping Tool: {e}"))?;
+
+    let timeout = Duration::from_secs(30);
+    let poll = Duration::from_millis(200);
+    let start = Instant::now();
+
+    let image = loop {
+        match clipboard.get_image() {
+            Ok(img) if img.bytes.len() >= img.width * img.height * 4 => break img,
+            _ => {
+                if start.elapsed() > timeout {
+                    return Err(
+                        "Timed out waiting for screenshot. Please try again.".to_string(),
+                    );
+                }
+                sleep(poll);
+            }
+        }
+    };
+
+    let width = u32::try_from(image.width).map_err(|_| "Screenshot width unsupported".to_string())?;
+    let height =
+        u32::try_from(image.height).map_err(|_| "Screenshot height unsupported".to_string())?;
+    let encoded = encode_png_from_rgba(image.bytes.as_ref(), width, height);
+
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    encoded
 }
 
 #[tauri::command]
@@ -300,8 +373,15 @@ fn launch_quick_assist() -> Result<(), String> {
             }
         }
 
-        Command::new("cmd")
-            .args(["/C", "start", "", "ms-quick-assist:"])
+        Command::new("powershell")
+            .args([
+                "-NoLogo",
+                "-NonInteractive",
+                "-WindowStyle",
+                "Hidden",
+                "-Command",
+                "Start-Process 'ms-quick-assist:'",
+            ])
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to start Quick Assist: {e}"))
