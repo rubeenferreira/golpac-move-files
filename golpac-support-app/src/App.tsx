@@ -1,4 +1,4 @@
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent, useRef } from "react";
 import "./App.css";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -67,9 +67,14 @@ function App() {
   const [quickAssistLaunching, setQuickAssistLaunching] = useState(false);
 
   // Screenshot state
-  const [screenshot, setScreenshot] = useState<string | null>(null);
+  const [screenshots, setScreenshots] = useState<string[]>([]);
   const [screenshotCapturing, setScreenshotCapturing] = useState(false);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
+  const [showOfflineDialog, setShowOfflineDialog] = useState<boolean>(
+    typeof navigator !== "undefined" ? !navigator.onLine : false
+  );
+  const [offlineDismissed, setOfflineDismissed] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // --- App version ---------------------------------------------------------
   useEffect(() => {
@@ -140,6 +145,43 @@ function App() {
       console.error("Failed to load saved preferences:", err);
     }
   }, []);
+
+  // --- Network status dialog ------------------------------------------------
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleOnline = () => {
+      setShowOfflineDialog(false);
+      setOfflineDismissed(false);
+    };
+
+    const handleOffline = () => {
+      setOfflineDismissed(false);
+      setShowOfflineDialog(true);
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (showOfflineDialog && !offlineDismissed) {
+      (async () => {
+        try {
+          const win = getCurrentWindow();
+          await win.show();
+          await win.setFocus();
+        } catch (err) {
+          console.error("Failed to bring window to front:", err);
+        }
+      })();
+    }
+  }, [showOfflineDialog, offlineDismissed]);
 
   // --- System info ---------------------------------------------------------
   async function loadSystemInfo(): Promise<SystemInfo> {
@@ -285,21 +327,67 @@ function App() {
 
   // --- Screenshot capture --------------------------------------------------
   async function handleCaptureScreenshot() {
+    if (screenshots.length >= 5) {
+      setScreenshotError("You can attach up to 5 screenshots.");
+      return;
+    }
     setScreenshotCapturing(true);
     setScreenshotError(null);
 
     try {
       const base64 = (await invoke("capture_screenshot")) as string;
       console.log("Screenshot captured, length:", base64.length);
-      setScreenshot(base64);
+      setScreenshots((prev) => [...prev, base64].slice(0, 5));
     } catch (err) {
       console.error("Failed to capture screenshot:", err);
-      setScreenshot(null);
       setScreenshotError(
         "Could not capture screenshot on this device. Please try again or attach manually if needed."
       );
     } finally {
       setScreenshotCapturing(false);
+    }
+  }
+
+  function handleRemoveScreenshot(index: number) {
+    setScreenshots((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleAttachFromFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+
+    const remaining = Math.max(0, 5 - screenshots.length);
+    if (remaining <= 0) {
+      setScreenshotError("You can attach up to 5 screenshots.");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+
+    const selected = Array.from(files).slice(0, remaining);
+
+    try {
+      const reads = await Promise.all(
+        selected.map(
+          (file) =>
+            new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const result = reader.result as string;
+                const base64 = result.split(",")[1] ?? result;
+                resolve(base64);
+              };
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(file);
+            })
+        )
+      );
+
+      setScreenshots((prev) => [...prev, ...reads].slice(0, 5));
+      setScreenshotError(null);
+    } catch (err) {
+      console.error("Failed to attach screenshot file:", err);
+      setScreenshotError("Could not attach that file. Please try again.");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -348,7 +436,7 @@ function App() {
         urgency,
         category,
         printerInfo,
-        screenshot,
+        screenshots,
         hostname: systemInfo.hostname,
         username: systemInfo.username,
         osVersion: resolvedOs,
@@ -404,7 +492,7 @@ function App() {
 
       setSubject("");
       setDescription("");
-      setScreenshot(null);
+      setScreenshots([]);
       setStatus("success");
     } catch (err) {
       console.error("Failed to send ticket:", err);
@@ -610,25 +698,52 @@ function App() {
                 type="button"
                 className="secondary-btn"
                 onClick={handleCaptureScreenshot}
-                disabled={screenshotCapturing}
+                disabled={screenshotCapturing || screenshots.length >= 5}
               >
                 {screenshotCapturing
                   ? "Capturing…"
-                  : screenshot
-                  ? "Retake screenshot"
+                  : screenshots.length > 0
+                  ? `📸 Add screenshot (${screenshots.length}/5)`
                   : "📸 Add screenshot"}
               </button>
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={screenshotCapturing || screenshots.length >= 5}
+              >
+                📁 Attach image
+              </button>
+              <input
+                type="file"
+                accept="image/*"
+                ref={fileInputRef}
+                style={{ display: "none" }}
+                multiple
+                onChange={(e) => handleAttachFromFiles(e.target.files)}
+              />
             </div>
 
-            {screenshot && (
-              <div className="screenshot-preview">
-                <small>Attached screenshot:</small>
-                <div className="screenshot-preview-inner">
-                  <img
-                    src={`data:image/png;base64,${screenshot}`}
-                    alt="Screenshot preview"
-                  />
-                </div>
+            {screenshots.length > 0 && (
+              <div className="screenshot-list">
+                {screenshots.map((shot, idx) => (
+                  <div key={idx} className="screenshot-preview">
+                    <small>Screenshot {idx + 1}</small>
+                    <div className="screenshot-preview-inner">
+                      <img
+                        src={`data:image/png;base64,${shot}`}
+                        alt={`Screenshot ${idx + 1}`}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      className="secondary-btn remove-screenshot-btn"
+                      onClick={() => handleRemoveScreenshot(idx)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 
@@ -676,6 +791,27 @@ function App() {
           <span>For urgent issues call: 888-585-0271</span>
         </footer>
       </div>
+      {(showOfflineDialog && !offlineDismissed) && (
+        <div className="offline-dialog-backdrop">
+          <div className="offline-dialog">
+            <div className="brand-logo logo-inline">
+              <img src={golpacLogo} alt="Golpac logo" />
+            </div>
+            <h2>No Network Connection</h2>
+            <p>
+              You're no longer connected to the network. If you need assistance, call Golpac
+              Support at 888-585-0271.
+            </p>
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => setOfflineDismissed(true)}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
