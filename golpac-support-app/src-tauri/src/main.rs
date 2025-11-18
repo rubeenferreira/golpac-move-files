@@ -320,7 +320,7 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
             "-WindowStyle",
             "Hidden",
             "-Command",
-            "Start-Process 'ms-screenclip:'",
+            "Start-Process -FilePath 'ms-screenclip:' -WindowStyle Hidden",
         ])
         .spawn()
         .map_err(|e| format!("Failed to start Snipping Tool: {e}"))?;
@@ -380,7 +380,7 @@ fn launch_quick_assist() -> Result<(), String> {
                 "-WindowStyle",
                 "Hidden",
                 "-Command",
-                "Start-Process 'ms-quick-assist:'",
+                "Start-Process -FilePath 'ms-quick-assist:' -WindowStyle Hidden",
             ])
             .spawn()
             .map(|_| ())

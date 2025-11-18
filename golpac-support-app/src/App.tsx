@@ -439,12 +439,28 @@ function App() {
     <div className="app-root">
       <div className="shell">
         <header className="shell-header">
-          <div className="brand-logo">
-            <img src={golpacLogo} alt="Golpac logo" />
+          <div className="brand-wrapper">
+            <div className="brand-logo">
+              <img src={golpacLogo} alt="Golpac logo" />
+            </div>
+            <div className="brand-text">
+              <h1>Golpac IT Support</h1>
+              <p>Describe the issue and we’ll take it from there.</p>
+            </div>
           </div>
-          <div className="brand-text">
-            <h1>Golpac IT Support</h1>
-            <p>Describe the issue and we’ll take it from there.</p>
+          <div className="quick-assist-inline quick-assist-inline--header">
+            <div>
+              <strong>Need remote help?</strong>{" "}
+              <span>Use Microsoft Quick Assist so we can connect.</span>
+            </div>
+            <button
+              type="button"
+              className="btn-outline-light"
+              onClick={handleConnectQuickAssist}
+              disabled={quickAssistLaunching}
+            >
+              {quickAssistLaunching ? "Connecting…" : "Connect via Quick Assist"}
+            </button>
           </div>
         </header>
 
@@ -633,29 +649,12 @@ function App() {
               </div>
             )}
 
-            <div className="quick-assist-inline">
-              <div>
-                <strong>Need remote help?</strong>{" "}
-                <span>Use Microsoft Quick Assist so we can connect.</span>
-              </div>
-              <button
-                type="button"
-                className="btn-outline-light"
-                onClick={handleConnectQuickAssist}
-                disabled={quickAssistLaunching}
+            {(quickAssistFeedback || quickAssistError) && (
+              <div
+                className="field-hint"
+                style={{ color: quickAssistError ? "#c53030" : "#2f855a" }}
               >
-                {quickAssistLaunching ? "Connecting…" : "Connect via Quick Assist"}
-              </button>
-            </div>
-
-            {quickAssistFeedback && (
-              <div className="field-hint" style={{ color: "#2f855a" }}>
-                {quickAssistFeedback}
-              </div>
-            )}
-            {quickAssistError && (
-              <div className="field-hint" style={{ color: "#c53030" }}>
-                {quickAssistError}
+                {quickAssistError || quickAssistFeedback}
               </div>
             )}
 

@@ -69,11 +69,19 @@ body {
 /* Header */
 
 .shell-header {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.brand-wrapper {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
 }
 
 .brand-logo {
@@ -186,6 +194,7 @@ textarea {
   color: var(--text-primary);
   padding: 8px 11px;
   font-size: 13px;
+  font-family: inherit;
   outline: none;
   transition:
     border-color 0.18s ease,
@@ -356,6 +365,43 @@ textarea:focus {
 
 .quick-assist-inline strong {
   color: #f8fafc;
+}
+
+.quick-assist-inline--header {
+  margin-left: 0;
+  margin-top: 0;
+  padding: 10px 16px;
+  max-width: none;
+  width: 100%;
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 800px) {
+  .shell-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .quick-assist-inline--header {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .form-row.two-col,
+  .form-row.two-col.with-printers {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .printer-panel {
+    padding-top: 8px;
+  }
+
+  .submit-row {
+    position: static;
+  }
+
+  .brand-wrapper {
+    width: 100%;
+  }
 }
 
 .submit-row {
