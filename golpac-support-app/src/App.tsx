@@ -174,10 +174,20 @@ function App() {
       (async () => {
         try {
           const win = getCurrentWindow();
+          await win.setAlwaysOnTop(true);
           await win.show();
           await win.setFocus();
         } catch (err) {
           console.error("Failed to bring window to front:", err);
+        }
+      })();
+    } else {
+      (async () => {
+        try {
+          const win = getCurrentWindow();
+          await win.setAlwaysOnTop(false);
+        } catch (err) {
+          console.error("Failed to reset always-on-top:", err);
         }
       })();
     }
