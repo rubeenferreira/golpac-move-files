@@ -8,7 +8,13 @@ use tauri::WindowEvent;
 use arboard::Clipboard;
 #[cfg(target_os = "windows")]
 use std::{
-    os::windows::process::CommandExt,thread::sleep, time::{Duration, Instant}};
+    env,
+    os::windows::process::CommandExt,
+    path::PathBuf,
+    process::Command,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 #[cfg(target_os = "windows")]
 use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App, AppHandle, Manager};
 #[cfg(target_os = "windows")]
@@ -44,6 +50,8 @@ const NOTIFICATION_TITLE: &str = "Golpac Support";
 const NOTIFICATION_BODY: &str = "Golpac Support Application is still running in the background.";
 #[cfg(target_os = "windows")]
 const MAIN_WINDOW_LABEL: &str = "main";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 //
 // ───────── System info ─────────
@@ -307,19 +315,46 @@ fn capture_screenshot_standard() -> Result<String, String> {
 
 #[cfg(target_os = "windows")]
 fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
-    use std::process::Command;
-
     let _ = window.hide();
 
     let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
     let _ = clipboard.clear();
 
-    Command::new("cmd")
-        .args(["/C", "start", "/B", "ms-screenclip:"])
-        .spawn()
-        .map_err(|e| format!("Failed to start Snipping Tool: {e}"))?;
+    let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let snipping_tool = PathBuf::from(&system_root)
+        .join("System32")
+        .join("SnippingTool.exe");
 
-    let timeout = Duration::from_secs(30);
+    let mut used_snipping_tool = false;
+
+    if snipping_tool.exists() {
+        match Command::new(&snipping_tool)
+            .arg("/clip")
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+        {
+            Ok(status) if status.success() => {
+                used_snipping_tool = true;
+            }
+            Ok(_) => {
+                let _ = window.show();
+                let _ = window.set_focus();
+                return Err("Screenshot canceled.".to_string());
+            }
+            Err(e) => {
+                eprintln!("SnippingTool launch failed: {e}. Falling back to screenclip URI.");
+                launch_screenclip_uri(CREATE_NO_WINDOW)?;
+            }
+        }
+    } else {
+        launch_screenclip_uri(CREATE_NO_WINDOW)?;
+    }
+
+    let timeout = if used_snipping_tool {
+        Duration::from_secs(5)
+    } else {
+        Duration::from_secs(30)
+    };
     let poll = Duration::from_millis(200);
     let start = Instant::now();
 
@@ -329,7 +364,7 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
             _ => {
                 if start.elapsed() > timeout {
                     return Err(
-                        "Timed out waiting for screenshot. Please try again.".to_string(),
+                        "Screenshot canceled or timed out. Please try again.".to_string(),
                     );
                 }
                 sleep(poll);
@@ -348,13 +383,20 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
     encoded
 }
 
+#[cfg(target_os = "windows")]
+fn launch_screenclip_uri(flags: u32) -> Result<(), String> {
+    Command::new("cmd")
+        .args(["/C", "start", "/MIN", "ms-screenclip:"])
+        .creation_flags(flags)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to start Snipping Tool: {e}"))
+}
+
 #[tauri::command]
 fn launch_quick_assist() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::{
-    os::windows::process::CommandExt,env, path::PathBuf, process::Command};
-
         let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
         let exe_path = PathBuf::from(&system_root)
             .join("System32")
@@ -369,8 +411,8 @@ fn launch_quick_assist() -> Result<(), String> {
         }
 
         Command::new("cmd")
-            .args(["/C", "start", "/MIN", "ms-quick-assist:" ])
-            .creation_flags(0x08000000)
+            .args(["/C", "start", "/MIN", "ms-quick-assist:"])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to start Quick Assist: {e}"))
