@@ -521,23 +521,6 @@ function App() {
                   </small>
 
                   <div className="printer-panel-body">
-                    <div className="printer-panel-actions">
-                      <button
-                        type="button"
-                        className="secondary-btn"
-                        onClick={() => loadPrinters(true)}
-                        disabled={printersLoading}
-                      >
-                        {printersLoading ? "Refreshing…" : "Refresh printers"}
-                      </button>
-                      {printersLastUpdated && (
-                        <small className="field-hint">
-                          Last updated:{" "}
-                          {new Date(printersLastUpdated).toLocaleString()}
-                        </small>
-                      )}
-                    </div>
-
                     {printersLoading && (
                       <div className="field-hint">
                         Loading printers on this computer…
@@ -563,7 +546,7 @@ function App() {
                     {!printersLoading &&
                       !printersError &&
                       printers.length > 0 && (
-                        <div className="select-wrapper" style={{ marginTop: 6 }}>
+                        <div className="select-wrapper">
                           <select
                             value={selectedPrinterName}
                             onChange={(e) =>
@@ -578,6 +561,23 @@ function App() {
                           </select>
                         </div>
                       )}
+                  </div>
+
+                  <div className="printer-panel-actions">
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => loadPrinters(true)}
+                      disabled={printersLoading}
+                    >
+                      {printersLoading ? "Refreshing…" : "Refresh printers"}
+                    </button>
+                    {printersLastUpdated && (
+                      <small className="field-hint">
+                        Last updated:{" "}
+                        {new Date(printersLastUpdated).toLocaleString()}
+                      </small>
+                    )}
                   </div>
                 </div>
               )}

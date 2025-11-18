@@ -316,12 +316,12 @@ fn capture_screenshot_standard() -> Result<String, String> {
 #[cfg(target_os = "windows")]
 fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
     let _ = window.hide();
-    std::thread::sleep(std::time::Duration::from_millis(150));
+    sleep(Duration::from_millis(150));
 
     let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {e}"))?;
     let _ = clipboard.clear();
 
-    let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\\\Windows".to_string());
     let snipping_tool = PathBuf::from(&system_root)
         .join("System32")
         .join("SnippingTool.exe");
@@ -338,39 +338,24 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
                 used_snipping_tool = true;
             }
             Ok(_) => {
-                let _ = window.show();
-                let _ = window.set_focus();
+                restore_window(&window);
                 return Err("Screenshot canceled.".to_string());
             }
             Err(e) => {
                 eprintln!("SnippingTool launch failed: {e}. Falling back to screenclip URI.");
-                launch_screenclip_uri(CREATE_NO_WINDOW)?;
+                launch_screenclip_uri()?;
             }
         }
     } else {
-        launch_screenclip_uri(CREATE_NO_WINDOW)?;
+        launch_screenclip_uri()?;
     }
 
-    let timeout = if used_snipping_tool {
-        Duration::from_secs(5)
+    let image = if used_snipping_tool {
+        clipboard
+            .get_image()
+            .map_err(|_| "Screenshot canceled.".to_string())?
     } else {
-        Duration::from_secs(30)
-    };
-    let poll = Duration::from_millis(200);
-    let start = Instant::now();
-
-    let image = loop {
-        match clipboard.get_image() {
-            Ok(img) if img.bytes.len() >= img.width * img.height * 4 => break img,
-            _ => {
-                if start.elapsed() > timeout {
-                    return Err(
-                        "Screenshot canceled or timed out. Please try again.".to_string(),
-                    );
-                }
-                sleep(poll);
-            }
-        }
+        wait_for_clipboard_image(&mut clipboard, Duration::from_secs(30))?
     };
 
     let width = u32::try_from(image.width).map_err(|_| "Screenshot width unsupported".to_string())?;
@@ -378,20 +363,46 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
         u32::try_from(image.height).map_err(|_| "Screenshot height unsupported".to_string())?;
     let encoded = encode_png_from_rgba(image.bytes.as_ref(), width, height);
 
-    let _ = window.show();
-    let _ = window.set_focus();
+    restore_window(&window);
 
-    encoded
+    Ok(encoded)
 }
 
 #[cfg(target_os = "windows")]
-fn launch_screenclip_uri(flags: u32) -> Result<(), String> {
+fn wait_for_clipboard_image(
+    clipboard: &mut Clipboard,
+    timeout: Duration,
+) -> Result<arboard::ImageData<'static>, String> {
+    let poll = Duration::from_millis(200);
+    let start = Instant::now();
+
+    loop {
+        match clipboard.get_image() {
+            Ok(img) if img.bytes.len() >= img.width * img.height * 4 => return Ok(img),
+            _ => {
+                if start.elapsed() > timeout {
+                    return Err("Screenshot canceled or timed out. Please try again.".to_string());
+                }
+                sleep(poll);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn launch_screenclip_uri() -> Result<(), String> {
     Command::new("cmd")
         .args(["/C", "start", "/MIN", "ms-screenclip:"])
-        .creation_flags(flags)
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Failed to start Snipping Tool: {e}"))
+}
+
+#[cfg(target_os = "windows")]
+fn restore_window(window: &tauri::Window) {
+    let _ = window.show();
+    let _ = window.set_focus();
 }
 
 #[tauri::command]
