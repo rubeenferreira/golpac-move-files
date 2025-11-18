@@ -288,17 +288,23 @@ fn launch_quick_assist() -> Result<(), String> {
         use std::{env, path::PathBuf, process::Command};
 
         let system_root = env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-        let exe_path = PathBuf::from(system_root).join("System32").join("QuickAssist.exe");
+        let exe_path = PathBuf::from(&system_root)
+            .join("System32")
+            .join("QuickAssist.exe");
 
-        Command::new(&exe_path)
+        if exe_path.exists() {
+            if let Err(e) = Command::new(&exe_path).spawn() {
+                eprintln!("Quick Assist exe launch failed: {e}. Falling back to URI.");
+            } else {
+                return Ok(());
+            }
+        }
+
+        Command::new("cmd")
+            .args(["/C", "start", "", "quickassist"])
             .spawn()
             .map(|_| ())
-            .map_err(|e| {
-                format!(
-                    "Failed to launch Quick Assist from {}: {e}",
-                    exe_path.display()
-                )
-            })
+            .map_err(|e| format!("Failed to start Quick Assist: {e}"))
     }
 
     #[cfg(not(target_os = "windows"))]

@@ -302,8 +302,14 @@ function App() {
       );
     } catch (err) {
       console.error("Failed to launch Quick Assist:", err);
+      const detail =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+          ? err
+          : "Unknown error.";
       setQuickAssistError(
-        "We couldn't open Quick Assist automatically. Press Windows + Ctrl + Q instead."
+        `We couldn't open Quick Assist automatically (${detail}). Press Windows + Ctrl + Q instead.`
       );
     } finally {
       setQuickAssistLaunching(false);
