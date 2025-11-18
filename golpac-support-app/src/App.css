@@ -461,6 +461,10 @@ textarea:focus {
   color: #fecaca;
 }
 
+.offline-banner {
+  margin-top: 12px;
+}
+
 .offline-dialog-backdrop {
   position: fixed;
   inset: 0;

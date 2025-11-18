@@ -495,10 +495,17 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
 //
 
 fn main() {
+    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(
+        |_app, _args, _cwd| {
+            #[cfg(target_os = "windows")]
+            {
+                reveal_main_window(&_app);
+            }
+        },
+    ));
+
     #[cfg(target_os = "windows")]
-    let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
-    #[cfg(not(target_os = "windows"))]
-    let builder = tauri::Builder::default();
+    let builder = builder.plugin(tauri_plugin_notification::init());
 
     builder
         .invoke_handler(tauri::generate_handler![

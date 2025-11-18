@@ -70,11 +70,13 @@ function App() {
   const [screenshots, setScreenshots] = useState<string[]>([]);
   const [screenshotCapturing, setScreenshotCapturing] = useState(false);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
-  const [showOfflineDialog, setShowOfflineDialog] = useState<boolean>(
-    typeof navigator !== "undefined" ? !navigator.onLine : false
-  );
-  const [offlineDismissed, setOfflineDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const initialOffline =
+    typeof navigator !== "undefined" ? !navigator.onLine : false;
+  const [isOffline, setIsOffline] = useState(initialOffline);
+  const [showOfflineDialog, setShowOfflineDialog] = useState(initialOffline);
+  const [offlineDismissed, setOfflineDismissed] = useState(false);
 
   // --- App version ---------------------------------------------------------
   useEffect(() => {
@@ -150,24 +152,31 @@ function App() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const handleOnline = () => {
-      setShowOfflineDialog(false);
-      setOfflineDismissed(false);
+    const updateStatus = () => {
+      const offline =
+        typeof navigator !== "undefined" ? !navigator.onLine : false;
+      setIsOffline(offline);
     };
 
-    const handleOffline = () => {
-      setOfflineDismissed(false);
-      setShowOfflineDialog(true);
-    };
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", updateStatus);
+    window.addEventListener("offline", updateStatus);
 
     return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", updateStatus);
+      window.removeEventListener("offline", updateStatus);
     };
   }, []);
+
+  useEffect(() => {
+    if (isOffline) {
+      if (!offlineDismissed) {
+        setShowOfflineDialog(true);
+      }
+    } else {
+      setShowOfflineDialog(false);
+      setOfflineDismissed(false);
+    }
+  }, [isOffline, offlineDismissed]);
 
   useEffect(() => {
     if (showOfflineDialog && !offlineDismissed) {
@@ -175,6 +184,7 @@ function App() {
         try {
           const win = getCurrentWindow();
           await win.setAlwaysOnTop(true);
+          await win.unminimize();
           await win.show();
           await win.setFocus();
         } catch (err) {
@@ -783,6 +793,13 @@ function App() {
               </div>
             )}
 
+            {offlineDismissed && isOffline && (
+              <div className="status status-error offline-banner">
+                You're no longer connected to the network. If you need assistance, call Golpac
+                Support at 888-585-0271.
+              </div>
+            )}
+
             <div className="submit-row">
               <button type="submit" className="primary-btn" disabled={sending}>
                 {sending ? "Sending…" : "Send to IT"}
@@ -815,7 +832,10 @@ function App() {
             <button
               type="button"
               className="primary-btn"
-              onClick={() => setOfflineDismissed(true)}
+              onClick={() => {
+                setOfflineDismissed(true);
+                setShowOfflineDialog(false);
+              }}
             >
               OK
             </button>
