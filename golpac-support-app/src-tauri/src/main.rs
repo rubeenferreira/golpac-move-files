@@ -366,15 +366,9 @@ fn launch_quick_assist() -> Result<(), String> {
             }
         }
 
-        Command::new("powershell")
-            .args([
-                "-NoLogo",
-                "-NonInteractive",
-                "-WindowStyle",
-                "Hidden",
-                "-Command",
-                "Start-Process -FilePath 'ms-quick-assist:' -WindowStyle Hidden",
-            ])
+        Command::new("cmd")
+            .args(["/C", "start", "/MIN", "ms-quick-assist:" ])
+            .creation_flags(0x08000000)
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to start Quick Assist: {e}"))
