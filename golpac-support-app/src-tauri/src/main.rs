@@ -12,6 +12,7 @@ use std::{
 };
 use sysinfo::{CpuExt, DiskExt, System, SystemExt};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
@@ -1005,14 +1006,19 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
 //
 
 fn main() {
-    let builder = tauri::Builder::default().plugin(tauri_plugin_single_instance::init(
-        |_app, _args, _cwd| {
-            #[cfg(target_os = "windows")]
-            {
-                reveal_main_window(&_app);
-            }
-        },
-    ));
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(
+            |_app, _args, _cwd| {
+                #[cfg(target_os = "windows")]
+                {
+                    reveal_main_window(&_app);
+                }
+            },
+        ))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ));
 
     #[cfg(target_os = "windows")]
     let builder = builder.plugin(tauri_plugin_notification::init());
@@ -1030,6 +1036,9 @@ fn main() {
             exit_application
         ])
         .setup(|app| {
+            if let Err(e) = app.autolaunch().enable() {
+                eprintln!("Failed to enable autostart: {e}");
+            }
             #[cfg(not(target_os = "windows"))]
             let _ = app;
 

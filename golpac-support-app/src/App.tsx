@@ -6,6 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import golpacLogo from "./assets/golpac-logo.png";
 import { TroubleshootPanel } from "./components/TroubleshootPanel";
+import { SystemPanel } from "./components/SystemPanel";
 
 type SystemInfo = {
   hostname: string;
@@ -120,7 +121,7 @@ function App() {
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
   const [loadingAppContext, setLoadingAppContext] = useState(false);
-  const [activeNav, setActiveNav] = useState<"home" | "troubleshoot">("home");
+  const [activeNav, setActiveNav] = useState<"home" | "troubleshoot" | "system">("home");
   const [pingState, setPingState] = useState<PingState>({ status: "idle" });
   const [showPingDetails, setShowPingDetails] = useState(false);
   const [vpnState, setVpnState] = useState<PingState>({ status: "idle" });
@@ -612,7 +613,7 @@ function App() {
     return <pre className="app-context-pre">{appContextDetails}</pre>;
   };
 
-  const handleNavClick = (tab: "home" | "troubleshoot") => {
+  const handleNavClick = (tab: "home" | "troubleshoot" | "system") => {
     setActiveNav(tab);
   };
 
@@ -778,6 +779,14 @@ function App() {
           </button>
         </div>
         <div className="sidebar-bottom">
+          <button
+            type="button"
+            className={`side-button ${activeNav === "system" ? "active" : ""}`}
+            onClick={() => handleNavClick("system")}
+          >
+            <span className="icon">💽</span>
+            <span>System</span>
+          </button>
           <button type="button" className="side-button exit" onClick={handleExitApp}>
             <span className="icon">⏻</span>
             <span>Exit</span>
@@ -1066,7 +1075,7 @@ function App() {
             </div>
           </form>
         </main>
-        ) : (
+        ) : activeNav === "troubleshoot" ? (
           <main className="shell-body troubleshoot-view">
             <TroubleshootPanel
               pingState={pingState}
@@ -1078,6 +1087,10 @@ function App() {
               showVpnDetails={showVpnDetails && !!vpnState.details}
               onToggleVpnDetails={() => setShowVpnDetails((prev) => !prev)}
             />
+          </main>
+        ) : (
+          <main className="shell-body troubleshoot-view">
+            <SystemPanel metrics={systemMetrics} />
           </main>
         )}
 

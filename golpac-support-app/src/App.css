@@ -70,6 +70,9 @@ body {
 
 .sidebar-bottom {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .side-button {
@@ -104,6 +107,11 @@ body {
 .side-button:hover {
   border-color: rgba(148, 163, 184, 0.6);
   transform: translateY(-1px);
+}
+
+button,
+.link-btn {
+  cursor: pointer;
 }
 
 /* Shell is the only "card", fills the window */
@@ -256,6 +264,7 @@ textarea {
   padding: 8px 11px;
   font-size: 13px;
   font-family: inherit;
+  cursor: text;
   outline: none;
   transition:
     border-color 0.18s ease,
