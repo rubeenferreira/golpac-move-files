@@ -466,7 +466,10 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
         .as_ref()
         .and_then(|g| ping_gateway(g));
 
-    let public_ip = fetch_public_ip();
+    let public_ip = std::thread::spawn(fetch_public_ip)
+        .join()
+        .ok()
+        .and_then(|r| r);
 
     Ok(SystemMetrics {
         uptime_seconds: uptime,
@@ -608,13 +611,13 @@ fn kib_to_gb(kib: u64) -> f64 {
 
 #[cfg(target_os = "windows")]
 fn default_gateway() -> Option<String> {
-    use std::process::Command;
     let script = r#"
 $route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric | Select-Object -First 1
 if ($route) { $route.NextHop }
 "#;
     Command::new("powershell")
         .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()
         .and_then(|out| {
@@ -634,9 +637,9 @@ fn default_gateway() -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn ping_gateway(gateway: &str) -> Option<f64> {
-    use std::process::Command;
     let output = Command::new("cmd")
         .args(["/C", "ping", "-n", "1", gateway])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -749,7 +752,6 @@ if ($obj.Keys.Count -gt 0) {
 
 #[cfg(target_os = "windows")]
 fn powershell_output(script: &str) -> Result<String, String> {
-    use std::process::Command;
     let output = Command::new("powershell")
         .args([
             "-NoLogo",
@@ -758,6 +760,7 @@ fn powershell_output(script: &str) -> Result<String, String> {
             "-Command",
             script,
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
     if output.status.success() {

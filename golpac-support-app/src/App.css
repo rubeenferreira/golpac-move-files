@@ -381,6 +381,61 @@ textarea:focus {
   border: 1px solid rgba(59, 130, 246, 0.25);
 }
 
+.app-context-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.3);
+  border-top-color: rgba(148, 163, 184, 0.9);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.app-context-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
+.app-context-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.2);
+}
+
+.app-context-list .label {
+  color: var(--text-muted);
+}
+
+.app-context-list .value {
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.app-context-pre {
+  margin: 0;
+  padding: 6px 8px;
+  background: rgba(2, 6, 23, 0.6);
+  border-radius: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 .quick-assist-inline {
   margin-top: 18px;
   padding: 12px 16px;

@@ -91,9 +91,7 @@ function App() {
   const [screenshotCapturing, setScreenshotCapturing] = useState(false);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(
-    null
-  );
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
   const [loadingAppContext, setLoadingAppContext] = useState(false);
 
@@ -483,6 +481,39 @@ function App() {
     }
   }
 
+  const renderAppContextDetails = () => {
+    if (!appContextDetails) {
+      return <small>Not available.</small>;
+    }
+
+    try {
+      const parsed = JSON.parse(appContextDetails) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object") {
+        const entries = Object.entries(parsed);
+        if (entries.length > 0) {
+          return (
+            <ul className="app-context-list">
+              {entries.map(([key, value]) => (
+                <li key={key}>
+                  <span className="label">{key}</span>
+                  <span className="value">
+                    {value === null || value === undefined || value === ""
+                      ? "—"
+                      : String(value)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
+      }
+    } catch {
+      // ignore parse errors
+    }
+
+    return <pre className="app-context-pre">{appContextDetails}</pre>;
+  };
+
   // --- Form submission -----------------------------------------------------
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -768,13 +799,14 @@ function App() {
 
             {(loadingAppContext || appContextDetails) && (
               <div className="app-context-hint">
+                <div className="app-context-header">
+                  <strong>App context</strong>
+                  {loadingAppContext && <span className="spinner" aria-label="Loading app context" />}
+                </div>
                 {loadingAppContext ? (
-                  <small>Gathering app context...</small>
+                  <small>Gathering app details…</small>
                 ) : (
-                  <small>
-                    <strong>App context:</strong>{" "}
-                    {appContextDetails || "Not available"}
-                  </small>
+                  renderAppContextDetails()
                 )}
               </div>
             )}
