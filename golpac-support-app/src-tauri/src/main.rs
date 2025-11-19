@@ -20,7 +20,6 @@ use std::{
     env,
     os::windows::process::CommandExt,
     path::PathBuf,
-    process::Command,
     time::Instant,
 };
 #[cfg(target_os = "windows")]
