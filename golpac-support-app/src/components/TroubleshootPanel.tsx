@@ -11,6 +11,10 @@ type TroubleshootPanelProps = {
   onPing: () => void;
   showDetails: boolean;
   onToggleDetails: () => void;
+  vpnState: PingPanelState;
+  onVpnTest: () => void;
+  showVpnDetails: boolean;
+  onToggleVpnDetails: () => void;
 };
 
 export function TroubleshootPanel({
@@ -18,8 +22,13 @@ export function TroubleshootPanel({
   onPing,
   showDetails,
   onToggleDetails,
+  vpnState,
+  onVpnTest,
+  showVpnDetails,
+  onToggleVpnDetails,
 }: TroubleshootPanelProps) {
-  const isLoading = pingState.status === "loading";
+  const isPingLoading = pingState.status === "loading";
+  const isVpnLoading = vpnState.status === "loading";
   return (
     <div className="troubleshoot-panel">
       <div className="troubleshoot-card">
@@ -30,10 +39,10 @@ export function TroubleshootPanel({
             type="button"
             className="secondary-btn wide"
             onClick={onPing}
-            disabled={isLoading}
+            disabled={isPingLoading}
           >
             <span className="icon">🌐</span>
-            {isLoading ? (
+            {isPingLoading ? (
               <>
                 Testing internet connection…
                 <span className="inline-spinner" aria-hidden />
@@ -42,8 +51,21 @@ export function TroubleshootPanel({
               "Test internet connection"
             )}
           </button>
-          <button type="button" className="secondary-btn wide" disabled>
-            <span className="icon">📡</span> Ping 2
+          <button
+            type="button"
+            className="secondary-btn wide"
+            onClick={onVpnTest}
+            disabled={isVpnLoading}
+          >
+            <span className="icon">📡</span>
+            {isVpnLoading ? (
+              <>
+                Checking VPN connection…
+                <span className="inline-spinner" aria-hidden />
+              </>
+            ) : (
+              "Test VPN connection"
+            )}
           </button>
           <button type="button" className="secondary-btn wide" disabled>
             <span className="icon">🛰</span> Ping 3
@@ -64,6 +86,24 @@ export function TroubleshootPanel({
             )}
             {showDetails && pingState.details && (
               <pre className="ping-details">{pingState.details}</pre>
+            )}
+          </div>
+        )}
+
+        {vpnState.status !== "idle" && (
+          <div className={`ping-result ${vpnState.status}`}>
+            <p>{vpnState.message}</p>
+            {vpnState.details && (
+              <button
+                type="button"
+                className="link-btn"
+                onClick={onToggleVpnDetails}
+              >
+                {showVpnDetails ? "Hide details" : "Show details"}
+              </button>
+            )}
+            {showVpnDetails && vpnState.details && (
+              <pre className="ping-details">{vpnState.details}</pre>
             )}
           </div>
         )}

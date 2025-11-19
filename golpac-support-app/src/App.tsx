@@ -69,6 +69,13 @@ type PingState = {
   result?: PingResult;
 };
 
+type VpnStatus = {
+  active: boolean;
+  name?: string | null;
+  ip?: string | null;
+  timestamp?: string | null;
+};
+
 const PREFS_KEY = "golpac-support-preferences";
 const PRINTER_CACHE_KEY = "golpac-printers-cache";
 
@@ -116,6 +123,9 @@ function App() {
   const [activeNav, setActiveNav] = useState<"home" | "troubleshoot">("home");
   const [pingState, setPingState] = useState<PingState>({ status: "idle" });
   const [showPingDetails, setShowPingDetails] = useState(false);
+  const [vpnState, setVpnState] = useState<PingState>({ status: "idle" });
+  const [showVpnDetails, setShowVpnDetails] = useState(false);
+  const [lastVpnResult, setLastVpnResult] = useState<VpnStatus | null>(null);
 
   const initialOffline =
     typeof navigator !== "undefined" ? !navigator.onLine : false;
@@ -536,6 +546,39 @@ function App() {
     }
   }
 
+  async function handleVpnTest() {
+    setVpnState({ status: "loading" });
+    setShowVpnDetails(false);
+    try {
+      const result = (await invoke("get_vpn_status")) as VpnStatus;
+      setLastVpnResult(result);
+      let message: string;
+      let details: string | null = null;
+      if (result.active) {
+        message = `Status: Connected (${result.name || "VPN"}) ${
+          result.ip ? `• IP ${result.ip}` : ""
+        }`;
+        details = `Name: ${result.name || "Unknown"}\nIP: ${
+          result.ip || "Unknown"
+        }\nChecked at: ${result.timestamp || new Date().toISOString()}`;
+        setVpnState({ status: "success", message, details });
+      } else {
+        message = "No VPN connection detected.";
+        details = result.timestamp
+          ? `Checked at: ${result.timestamp}`
+          : null;
+        setVpnState({ status: "error", message, details });
+      }
+    } catch (err) {
+      console.error("Failed to check VPN status:", err);
+      setVpnState({
+        status: "error",
+        message: "Could not determine VPN status. Please try again.",
+        details: err instanceof Error ? err.message : "Unknown error.",
+      });
+    }
+  }
+
   const renderAppContextDetails = () => {
     if (!appContextDetails) {
       return <small>Not available.</small>;
@@ -622,6 +665,11 @@ function App() {
         screenshot: screenshots[0] ?? null,
         systemMetrics,
         appContext: appContextDetails,
+        networkStatus: {
+          online: !isOffline,
+          checkedAt: new Date().toISOString(),
+          vpn: lastVpnResult,
+        },
         hostname: systemInfo.hostname,
         username: systemInfo.username,
         osVersion: resolvedOs,
@@ -1025,6 +1073,10 @@ function App() {
               onPing={handlePingTest}
               showDetails={showPingDetails && !!pingState.details}
               onToggleDetails={() => setShowPingDetails((prev) => !prev)}
+              vpnState={vpnState}
+              onVpnTest={handleVpnTest}
+              showVpnDetails={showVpnDetails && !!vpnState.details}
+              onToggleVpnDetails={() => setShowVpnDetails((prev) => !prev)}
             />
           </main>
         )}

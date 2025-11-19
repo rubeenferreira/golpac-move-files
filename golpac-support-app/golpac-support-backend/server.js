@@ -54,6 +54,7 @@ function buildTextBody({
   hasScreenshot,
   systemMetricsText,
   appContextText,
+  networkStatusText,
 }) {
   return `
 New IT support request from Golpac desktop app
@@ -78,6 +79,11 @@ Category details
 -----------------------------
 Category: ${category || "Not specified"}
 Printer info: ${printerInfoText || "N/A"}
+
+-----------------------------
+Network status
+-----------------------------
+${networkStatusText || "Unavailable"}
 
 -----------------------------
 System metrics
@@ -126,6 +132,7 @@ function buildHtmlBody({
   hasScreenshot,
   systemMetricsHtml,
   appContextHtml,
+  networkStatusHtml,
 }) {
   const urgencyColor =
     resolvedUrgency === "High"
@@ -291,6 +298,15 @@ function buildHtmlBody({
                   </tr>
                 </table>
 
+                ${
+                  networkStatusHtml
+                    ? `
+                <h3 style="margin:0 0 6px;font-size:14px;color:#111827;">Network status</h3>
+                ${networkStatusHtml}
+                `
+                    : ""
+                }
+
                 <h3 style="margin:0 0 6px;font-size:14px;color:#111827;">Screenshot</h3>
                 <p style="margin:4px 0 0;font-size:13px;color:#111827;">
                   ${escapeHtml(screenshotText)}
@@ -434,6 +450,39 @@ function formatAppContextHtml(value) {
   `;
 }
 
+function formatNetworkStatusText(status) {
+  if (!status) return "Unknown";
+  return status.online
+    ? `Online (checked at ${status.checkedAt || "unknown"})`
+    : `Offline (checked at ${status.checkedAt || "unknown"})`;
+}
+
+function formatNetworkStatusHtml(status) {
+  if (!status) return "";
+  const vpnText = status.vpn
+    ? status.vpn.active
+      ? `Connected (${status.vpn.name || "VPN"}) ${status.vpn.ip ? `• ${status.vpn.ip}` : ""}`
+      : "No VPN connection detected"
+    : "Not tested";
+
+  return `
+    <table cellpadding="0" cellspacing="0" style="width:100%;font-size:13px;color:#111827;margin-bottom:16px;">
+      <tr>
+        <td style="padding:4px 0;color:#6b7280;width:150px;">Internet</td>
+        <td style="padding:4px 0;">${status.online ? "Online" : "Offline"}</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 0;color:#6b7280;">Checked at</td>
+        <td style="padding:4px 0;">${escapeHtml(status.checkedAt || "Unknown")}</td>
+      </tr>
+      <tr>
+        <td style="padding:4px 0;color:#6b7280;">VPN</td>
+        <td style="padding:4px 0;">${escapeHtml(vpnText)}</td>
+      </tr>
+    </table>
+  `;
+}
+
 function formatNumber(num) {
   if (num == null || Number.isNaN(num)) return "0";
   return Number(num).toFixed(2);
@@ -475,6 +524,7 @@ app.post("/api/ticket", async (req, res) => {
       screenshots: screenshotArray,
       systemMetrics,
       appContext,
+      networkStatus,
     } = req.body;
 
     console.log("📨 Incoming ticket payload keys:", Object.keys(req.body));
@@ -557,6 +607,8 @@ app.post("/api/ticket", async (req, res) => {
     const systemMetricsHtml = formatSystemMetricsHtml(systemMetrics);
     const appContextText = formatAppContextText(appContext);
     const appContextHtml = formatAppContextHtml(appContext);
+    const networkStatusText = formatNetworkStatusText(networkStatus);
+    const networkStatusHtml = formatNetworkStatusHtml(networkStatus);
 
     const templateData = {
       subject,
@@ -574,6 +626,7 @@ app.post("/api/ticket", async (req, res) => {
       hasScreenshot,
       systemMetricsText,
       appContextText,
+      networkStatusText,
     };
 
     const textBody = buildTextBody(templateData);
@@ -581,6 +634,7 @@ app.post("/api/ticket", async (req, res) => {
       ...templateData,
       systemMetricsHtml,
       appContextHtml,
+      networkStatusHtml,
     });
 
     // attachments: only screenshot file

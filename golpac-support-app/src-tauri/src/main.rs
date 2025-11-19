@@ -93,6 +93,13 @@ struct AppContextInfo {
     details: Option<String>,
 }
 
+#[derive(Serialize, Default)]
+struct VpnStatus {
+    active: bool,
+    name: Option<String>,
+    ip: Option<String>,
+    timestamp: String,
+}
 #[derive(Serialize)]
 struct PingSummary {
     success: bool,
@@ -562,6 +569,65 @@ fn get_app_context(category: String) -> Result<AppContextInfo, String> {
 }
 
 #[tauri::command]
+fn get_vpn_status() -> Result<VpnStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+$vpn = Get-VpnConnection | Where-Object { $_.ConnectionStatus -eq 'Connected' } | Select-Object -First 1
+if ($vpn) {
+  $ipConfig = Get-NetIPConfiguration | Where-Object { $_.InterfaceAlias -eq $vpn.Name } | Select-Object -First 1
+  $ip = if ($ipConfig -and $ipConfig.IPv4Address) { $ipConfig.IPv4Address[0].IPAddress } else { '' }
+  "$($vpn.Name)|$ip"
+}
+"#;
+
+        let output = Command::new("powershell")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("Failed to query VPN: {e}"))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        if stdout.is_empty() {
+            return Ok(VpnStatus {
+                active: false,
+                name: None,
+                ip: None,
+                timestamp: Utc::now().to_rfc3339(),
+            });
+        }
+
+        let mut parts = stdout.splitn(2, '|');
+        let name = parts.next().map(|s| s.to_string()).filter(|s| !s.is_empty());
+        let ip = parts.next().map(|s| s.to_string()).filter(|s| !s.is_empty());
+
+        Ok(VpnStatus {
+            active: true,
+            name,
+            ip,
+            timestamp: Utc::now().to_rfc3339(),
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(VpnStatus {
+            active: false,
+            name: None,
+            ip: None,
+            timestamp: Utc::now().to_rfc3339(),
+        })
+    }
+}
+
+#[tauri::command]
 fn exit_application(app: AppHandle) {
     app.exit(0);
 }
@@ -960,6 +1026,7 @@ fn main() {
             launch_quick_assist,
             get_system_metrics,
             get_app_context,
+            get_vpn_status,
             test_internet_connection,
             exit_application
         ])
