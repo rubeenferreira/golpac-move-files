@@ -47,7 +47,11 @@ use windows::{
 #[cfg(target_os = "windows")]
 const TRAY_ICON_ID: &str = "golpac-support-tray";
 #[cfg(target_os = "windows")]
-const TRAY_MENU_ID_SHOW: &str = "golpac-tray-show";
+const TRAY_MENU_ID_HOME: &str = "golpac-tray-home";
+#[cfg(target_os = "windows")]
+const TRAY_MENU_ID_TROUBLESHOOT: &str = "golpac-tray-troubleshoot";
+#[cfg(target_os = "windows")]
+const TRAY_MENU_ID_SYSTEM: &str = "golpac-tray-system";
 #[cfg(target_os = "windows")]
 const TRAY_MENU_ID_QUIT: &str = "golpac-tray-quit";
 #[cfg(target_os = "windows")]
@@ -738,6 +742,13 @@ fn reveal_main_window(app_handle: &AppHandle) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn emit_tray_navigation(app_handle: &AppHandle, target: &'static str) {
+    if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.emit("tray-navigate", target);
+    }
+}
+
 fn monitor_network(app_handle: AppHandle) {
     std::thread::spawn(move || {
         let mut last_state: Option<bool> = None;
@@ -882,14 +893,30 @@ $roots = @(
 )
 foreach ($root in $roots) {
   if (Test-Path $root) {
-    $sub = Get-ChildItem $root | Where-Object { $_.PSChildName -like 'Acrobat*' } | Select-Object -First 1
+    $sub = Get-ChildItem -Path $root -Recurse -ErrorAction SilentlyContinue |
+      Where-Object { $_.PSChildName -match 'Acrobat' -or $_.PSChildName -match 'Reader' } |
+      Select-Object -First 1
     if ($sub) {
-      $item = Get-ItemProperty $sub.PSPath
-      [PSCustomObject]@{
-        Product = $sub.PSChildName
-        Version = $item.Version
-      } | ConvertTo-Json -Compress
-      break
+      $item = Get-ItemProperty $sub.PSPath -ErrorAction SilentlyContinue
+      if ($item) {
+        $product = $item.ProductName
+        if (-not $product -and $item.DisplayName) { $product = $item.DisplayName }
+        if (-not $product) { $product = $sub.PSChildName }
+
+        $version = $item.Version
+        if (-not $version -and $item.DisplayVersion) { $version = $item.DisplayVersion }
+
+        $install = $item.InstallPath
+        if (-not $install -and $item.Path) { $install = $item.Path }
+        if (-not $install -and $item.InstallDir) { $install = $item.InstallDir }
+
+        [PSCustomObject]@{
+          Product = $product
+          Version = $version
+          InstallLocation = $install
+        } | ConvertTo-Json -Compress
+        break
+      }
     }
   }
 }
@@ -1026,7 +1053,9 @@ fn parse_ping_average(output: &str) -> Option<f64> {
 #[cfg(target_os = "windows")]
 fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
     let tray_menu = MenuBuilder::new(app)
-        .text(TRAY_MENU_ID_SHOW, "Open Golpac Support")
+        .text(TRAY_MENU_ID_HOME, "Home")
+        .text(TRAY_MENU_ID_TROUBLESHOOT, "Troubleshoot")
+        .text(TRAY_MENU_ID_SYSTEM, "System")
         .text(TRAY_MENU_ID_QUIT, "Quit Golpac Support")
         .build()?;
 
@@ -1034,7 +1063,18 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
         .menu(&tray_menu)
         .tooltip(TRAY_TOOLTIP)
         .on_menu_event(|app_handle, event| match event.id().as_ref() {
-            TRAY_MENU_ID_SHOW => reveal_main_window(app_handle),
+            TRAY_MENU_ID_HOME => {
+                reveal_main_window(app_handle);
+                emit_tray_navigation(app_handle, "home");
+            }
+            TRAY_MENU_ID_TROUBLESHOOT => {
+                reveal_main_window(app_handle);
+                emit_tray_navigation(app_handle, "troubleshoot");
+            }
+            TRAY_MENU_ID_SYSTEM => {
+                reveal_main_window(app_handle);
+                emit_tray_navigation(app_handle, "system");
+            }
             TRAY_MENU_ID_QUIT => app_handle.exit(0),
             _ => {}
         });

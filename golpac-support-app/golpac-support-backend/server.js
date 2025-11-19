@@ -356,11 +356,6 @@ function formatSystemMetricsText(metrics) {
       metrics.memory_total_gb
     )} GB`,
     `Default gateway: ${metrics.default_gateway || "Unknown"}`,
-    `Gateway ping: ${
-      metrics.gateway_ping_ms != null
-        ? `${formatNumber(metrics.gateway_ping_ms)} ms`
-        : "No response"
-    }`,
     `Public IP: ${metrics.public_ip || "Unknown"}`,
     `Captured at: ${metrics.timestamp || "Unknown"}`
   ];
@@ -393,12 +388,6 @@ function formatSystemMetricsHtml(metrics) {
       `${formatNumber(metrics.memory_used_gb)} GB of ${formatNumber(metrics.memory_total_gb)} GB`,
     ],
     ["Default gateway", escapeHtml(metrics.default_gateway || "Unknown")],
-    [
-      "Gateway ping",
-      metrics.gateway_ping_ms != null
-        ? `${formatNumber(metrics.gateway_ping_ms)} ms`
-        : "No response",
-    ],
     ["Public IP", escapeHtml(metrics.public_ip || "Unknown")],
     ["Captured at", escapeHtml(metrics.timestamp || "Unknown")],
   ];

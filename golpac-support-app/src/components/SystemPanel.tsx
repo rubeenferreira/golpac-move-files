@@ -32,9 +32,11 @@ type SystemInfoShape = {
 type SystemPanelProps = {
   metrics: MetricsShape | null;
   info: SystemInfoShape | null;
+  onRefresh?: () => void;
+  reloading?: boolean;
 };
 
-export function SystemPanel({ metrics, info }: SystemPanelProps) {
+export function SystemPanel({ metrics, info, onRefresh, reloading }: SystemPanelProps) {
   const diskEntries =
     metrics?.disks && metrics.disks.length > 0
       ? metrics.disks
@@ -83,13 +85,6 @@ export function SystemPanel({ metrics, info }: SystemPanelProps) {
       value: metrics?.default_gateway || "Unknown",
     },
     {
-      label: "Gateway ping",
-      value:
-        metrics?.gateway_ping_ms != null
-          ? `${Math.round(metrics.gateway_ping_ms)} ms`
-          : "No response",
-    },
-    {
       label: "Public IP",
       value: metrics?.public_ip || "Unknown",
     },
@@ -103,7 +98,9 @@ export function SystemPanel({ metrics, info }: SystemPanelProps) {
     <div className="system-panel">
       <div className="system-grid">
         <div className="system-card">
-          <h2>System summary</h2>
+          <div className="system-card-header">
+            <h2>System summary</h2>
+          </div>
           <p>Snapshot of this workstation.</p>
           <dl className="system-facts">
             {summaryFacts.map((fact) => (
@@ -116,7 +113,19 @@ export function SystemPanel({ metrics, info }: SystemPanelProps) {
         </div>
 
         <div className="system-card">
-          <h2>Health & network</h2>
+          <div className="system-card-header">
+            <h2>Health & network</h2>
+            {onRefresh && (
+              <button
+                type="button"
+                className="refresh-btn"
+                onClick={onRefresh}
+                disabled={reloading}
+              >
+                {reloading ? "Refreshing…" : "Refresh"}
+              </button>
+            )}
+          </div>
           <p>Live metrics gathered in the background.</p>
           {metrics ? (
             <dl className="system-facts">

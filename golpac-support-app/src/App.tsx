@@ -129,6 +129,7 @@ function App() {
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
+  const [systemMetricsLoading, setSystemMetricsLoading] = useState(false);
   const [systemOverview, setSystemOverview] = useState<SystemInfo | null>(null);
   const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
   const [loadingAppContext, setLoadingAppContext] = useState(false);
@@ -289,6 +290,27 @@ function App() {
       })();
     }
   }, [showOfflineDialog, offlineDismissed]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("tray-navigate", (event) => {
+      const target = event.payload;
+      if (
+        target === "home" ||
+        target === "troubleshoot" ||
+        target === "system"
+      ) {
+        setActiveNav(target);
+        if (target === "system") {
+          loadSystemMetrics();
+        }
+      }
+    }).then((fn) => (unlisten = fn));
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
 
   useEffect(() => {
     const cat = category.trim().toLowerCase();
@@ -509,11 +531,14 @@ function App() {
   }
 
   async function loadSystemMetrics() {
+    setSystemMetricsLoading(true);
     try {
       const metrics = (await invoke("get_system_metrics")) as SystemMetrics;
       setSystemMetrics(metrics);
     } catch (err) {
       console.error("Failed to load system metrics:", err);
+    } finally {
+      setSystemMetricsLoading(false);
     }
   }
 
@@ -633,6 +658,9 @@ function App() {
 
   const handleNavClick = (tab: "home" | "troubleshoot" | "system") => {
     setActiveNav(tab);
+    if (tab === "system") {
+      loadSystemMetrics();
+    }
   };
 
   // --- Form submission -----------------------------------------------------
@@ -1109,7 +1137,12 @@ function App() {
           </main>
         ) : (
           <main className="shell-body troubleshoot-view">
-            <SystemPanel metrics={systemMetrics} info={systemOverview} />
+            <SystemPanel
+              metrics={systemMetrics}
+              info={systemOverview}
+              onRefresh={loadSystemMetrics}
+              reloading={systemMetricsLoading}
+            />
           </main>
         )}
 
