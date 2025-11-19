@@ -70,6 +70,15 @@ struct SystemInfo {
     username: String,
     os_version: String,
     ipv4: String,
+    domain: Option<String>,
+}
+
+#[derive(Serialize, Clone, Default)]
+struct DiskSnapshot {
+    name: String,
+    mount: String,
+    total_gb: f64,
+    free_gb: f64,
 }
 
 #[derive(Serialize, Default)]
@@ -85,6 +94,8 @@ struct SystemMetrics {
     gateway_ping_ms: Option<f64>,
     public_ip: Option<String>,
     timestamp: String,
+    disks: Vec<DiskSnapshot>,
+    cpu_brand: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -122,12 +133,17 @@ fn get_system_info() -> SystemInfo {
     let ipv4 = local_ip()
         .map(|ip| ip.to_string())
         .unwrap_or_else(|_| "Unknown".to_string());
+    #[cfg(target_os = "windows")]
+    let domain = std::env::var("USERDOMAIN").ok();
+    #[cfg(not(target_os = "windows"))]
+    let domain = None;
 
     SystemInfo {
         hostname,
         username,
         os_version,
         ipv4,
+        domain,
     }
 }
 
@@ -509,16 +525,44 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
 
     let mut free_disk_c = 0f64;
     let mut total_disk_c = 0f64;
+    let mut disks: Vec<DiskSnapshot> = Vec::new();
     for disk in system.disks() {
         let mount = disk.mount_point().to_string_lossy().to_string();
         if mount.to_uppercase().starts_with("C:") {
             free_disk_c = bytes_to_gb(disk.available_space());
             total_disk_c = bytes_to_gb(disk.total_space());
-            break;
         }
+        let name = disk
+            .name()
+            .to_string_lossy()
+            .trim()
+            .to_string();
+        let label = if name.is_empty() {
+            mount.clone()
+        } else {
+            name
+        };
+
+        disks.push(DiskSnapshot {
+            name: label,
+            mount: mount.clone(),
+            total_gb: bytes_to_gb(disk.total_space()),
+            free_gb: bytes_to_gb(disk.available_space()),
+        });
     }
 
     let cpu_usage = system.global_cpu_info().cpu_usage();
+    let cpu_brand = system
+        .global_cpu_info()
+        .brand()
+        .trim()
+        .to_string();
+    let cpu_brand = if cpu_brand.is_empty() {
+        None
+    } else {
+        Some(cpu_brand)
+    };
+
     let total_mem = system.total_memory();
     let used_mem = system.used_memory();
     let memory_total_gb = kib_to_gb(total_mem);
@@ -546,6 +590,8 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
         gateway_ping_ms: ping,
         public_ip,
         timestamp: Utc::now().to_rfc3339(),
+        disks,
+        cpu_brand,
     })
 }
 

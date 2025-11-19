@@ -109,9 +109,28 @@ body {
   transform: translateY(-1px);
 }
 
+body {
+  cursor: default;
+}
+
+a,
 button,
-.link-btn {
+[role="button"],
+.link-btn,
+.side-button,
+.primary-btn,
+.secondary-btn,
+.btn-outline-light,
+.troubleshoot-buttons .wide,
+.quick-assist-inline button,
+.printer-panel-actions button,
+.submit-row button {
   cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  cursor: not-allowed;
 }
 
 /* Shell is the only "card", fills the window */

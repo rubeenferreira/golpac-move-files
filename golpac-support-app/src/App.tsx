@@ -14,6 +14,7 @@ type SystemInfo = {
   os_version?: string;
   osVersion?: string;
   ipv4: string;
+  domain?: string | null;
 };
 
 type Urgency = "Low" | "Normal" | "High";
@@ -33,6 +34,13 @@ type PrinterInfo = {
   status?: string | null;
 };
 
+type DiskMetric = {
+  name: string;
+  mount: string;
+  total_gb: number;
+  free_gb: number;
+};
+
 type SystemMetrics = {
   uptime_seconds: number;
   uptime_human: string;
@@ -45,6 +53,8 @@ type SystemMetrics = {
   gateway_ping_ms?: number | null;
   public_ip?: string | null;
   timestamp: string;
+  disks?: DiskMetric[];
+  cpu_brand?: string | null;
 };
 
 type AppContextInfo = {
@@ -119,6 +129,7 @@ function App() {
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
+  const [systemOverview, setSystemOverview] = useState<SystemInfo | null>(null);
   const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
   const [loadingAppContext, setLoadingAppContext] = useState(false);
   const [activeNav, setActiveNav] = useState<"home" | "troubleshoot" | "system">("home");
@@ -228,6 +239,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    loadSystemInfo()
+      .then((info) => setSystemOverview(info))
+      .catch((err) => console.error("Failed to preload system info:", err));
+  }, []);
+
+  useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<boolean>("network-status", (event) => {
       setIsOffline(!event.payload);
@@ -295,6 +312,7 @@ function App() {
         username: "Unknown",
         os_version: "Unknown OS",
         ipv4: "Unknown",
+        domain: null,
       };
     }
   }
@@ -636,6 +654,7 @@ function App() {
 
     try {
       const systemInfo = await loadSystemInfo();
+      setSystemOverview(systemInfo);
       const resolvedOs =
         systemInfo.osVersion || systemInfo.os_version || "Unknown OS";
 
@@ -784,7 +803,7 @@ function App() {
             className={`side-button ${activeNav === "system" ? "active" : ""}`}
             onClick={() => handleNavClick("system")}
           >
-            <span className="icon">💽</span>
+            <span className="icon">⚙️</span>
             <span>System</span>
           </button>
           <button type="button" className="side-button exit" onClick={handleExitApp}>
@@ -1090,7 +1109,7 @@ function App() {
           </main>
         ) : (
           <main className="shell-body troubleshoot-view">
-            <SystemPanel metrics={systemMetrics} />
+            <SystemPanel metrics={systemMetrics} info={systemOverview} />
           </main>
         )}
 
