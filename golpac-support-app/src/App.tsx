@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import golpacLogo from "./assets/golpac-logo.png";
+import { TroubleshootPanel } from "./components/TroubleshootPanel";
 
 type SystemInfo = {
   hostname: string;
@@ -48,6 +49,24 @@ type SystemMetrics = {
 type AppContextInfo = {
   category: string;
   details?: string | null;
+};
+
+type PingResult = {
+  success: boolean;
+  attempts: number;
+  responses: number;
+  packet_loss?: number | null;
+  average_ms?: number | null;
+  error?: string | null;
+  raw_output?: string | null;
+  target: string;
+};
+
+type PingState = {
+  status: "idle" | "loading" | "success" | "error";
+  message?: string;
+  details?: string | null;
+  result?: PingResult;
 };
 
 const PREFS_KEY = "golpac-support-preferences";
@@ -94,6 +113,9 @@ function App() {
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
   const [loadingAppContext, setLoadingAppContext] = useState(false);
+  const [activeNav, setActiveNav] = useState<"home" | "troubleshoot">("home");
+  const [pingState, setPingState] = useState<PingState>({ status: "idle" });
+  const [showPingDetails, setShowPingDetails] = useState(false);
 
   const initialOffline =
     typeof navigator !== "undefined" ? !navigator.onLine : false;
@@ -481,6 +503,39 @@ function App() {
     }
   }
 
+  async function handleExitApp() {
+    try {
+      await invoke("exit_application");
+    } catch (err) {
+      console.error("Failed to exit app:", err);
+    }
+  }
+
+  async function handlePingTest() {
+    setPingState({ status: "loading" });
+    setShowPingDetails(false);
+    try {
+      const result = (await invoke("test_internet_connection")) as PingResult;
+      const message = buildPingMessage(result);
+      const details = buildPingDetails(result);
+      setPingState({
+        status: result.success ? "success" : "error",
+        message,
+        details,
+        result,
+      });
+    } catch (err) {
+      console.error("Failed to run ping test:", err);
+      setPingState({
+        status: "error",
+        message:
+          "We couldn't run the network test. Please try again or call IT.",
+        details:
+          err instanceof Error ? err.message : "Unknown error while testing.",
+      });
+    }
+  }
+
   const renderAppContextDetails = () => {
     if (!appContextDetails) {
       return <small>Not available.</small>;
@@ -512,6 +567,10 @@ function App() {
     }
 
     return <pre className="app-context-pre">{appContextDetails}</pre>;
+  };
+
+  const handleNavClick = (tab: "home" | "troubleshoot") => {
+    setActiveNav(tab);
   };
 
   // --- Form submission -----------------------------------------------------
@@ -651,6 +710,33 @@ function App() {
   // --- UI ------------------------------------------------------------------
   return (
     <div className="app-root">
+      <aside className="sidebar">
+        <div className="sidebar-top">
+          <button
+            type="button"
+            className={`side-button ${activeNav === "home" ? "active" : ""}`}
+            onClick={() => handleNavClick("home")}
+          >
+            <span className="icon">🏠</span>
+            <span>Home</span>
+          </button>
+          <button
+            type="button"
+            className={`side-button ${activeNav === "troubleshoot" ? "active" : ""}`}
+            onClick={() => handleNavClick("troubleshoot")}
+          >
+            <span className="icon">🛠</span>
+            <span>Troubleshoot</span>
+          </button>
+        </div>
+        <div className="sidebar-bottom">
+          <button type="button" className="side-button exit" onClick={handleExitApp}>
+            <span className="icon">⏻</span>
+            <span>Exit</span>
+          </button>
+        </div>
+      </aside>
+
       <div className="shell">
         <header className="shell-header">
           <div className="brand-wrapper">
@@ -678,8 +764,9 @@ function App() {
           </div>
         </header>
 
-        <main className="shell-body">
-          <form className="form" onSubmit={handleSubmit}>
+        {activeNav === "home" ? (
+          <main className="shell-body">
+            <form className="form" onSubmit={handleSubmit}>
             <div className={`form-row two-col ${category === "Printers" ? "with-printers" : ""}`}>
               <label className={`field ${category === "Printers" ? "printer-category" : ""}`}>
                 <span>Your email (optional)</span>
@@ -929,8 +1016,18 @@ function App() {
             <div className="meta">
               <small>App version: {appVersion}</small>
             </div>
-         </form>
-       </main>
+          </form>
+        </main>
+        ) : (
+          <main className="shell-body troubleshoot-view">
+            <TroubleshootPanel
+              pingState={pingState}
+              onPing={handlePingTest}
+              showDetails={showPingDetails && !!pingState.details}
+              onToggleDetails={() => setShowPingDetails((prev) => !prev)}
+            />
+          </main>
+        )}
 
         <footer className="shell-footer">
           <span>Golpac LLC</span>
@@ -967,3 +1064,35 @@ function App() {
 }
 
 export default App;
+
+function buildPingMessage(result: PingResult) {
+  const avgText = result.average_ms
+    ? `${Math.round(result.average_ms)} ms`
+    : "n/a";
+  const lossText =
+    result.packet_loss != null ? `${result.packet_loss.toFixed(0)}% packet loss` : "packet loss n/a";
+
+  if (result.success) {
+    return `Internet connection looks good. We reached ${result.target} (average ${avgText}, ${lossText}).`;
+  }
+  return `We couldn't reach ${result.target}. This usually means you're offline or there's a network issue. Call IT if the issue persists.`;
+}
+
+function buildPingDetails(result: PingResult) {
+  const lines = [
+    `Attempts: ${result.attempts}`,
+    `Responses: ${result.responses}`,
+    `Packet loss: ${
+      result.packet_loss != null ? `${result.packet_loss.toFixed(0)}%` : "n/a"
+    }`,
+    `Average latency: ${
+      result.average_ms != null ? `${Math.round(result.average_ms)} ms` : "n/a"
+    }`,
+    result.error ? `Error: ${result.error}` : null,
+    "",
+    "Raw output:",
+    result.raw_output || "n/a",
+  ].filter(Boolean);
+
+  return lines.join("\n");
+}

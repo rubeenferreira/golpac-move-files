@@ -6,6 +6,7 @@ use reqwest::blocking::Client;
 use serde::Serialize;
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
+    process::Command,
     thread::sleep,
     time::Duration,
 };
@@ -90,6 +91,18 @@ struct SystemMetrics {
 struct AppContextInfo {
     category: String,
     details: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PingSummary {
+    success: bool,
+    attempts: u32,
+    responses: u32,
+    packet_loss: Option<f64>,
+    average_ms: Option<f64>,
+    error: Option<String>,
+    target: String,
+    raw_output: String,
 }
 
 #[tauri::command]
@@ -433,6 +446,49 @@ fn restore_window(window: &tauri::Window) {
 }
 
 #[tauri::command]
+fn test_internet_connection() -> Result<PingSummary, String> {
+    const TARGET: &str = "8.8.8.8";
+    #[cfg(target_os = "windows")]
+    let output = Command::new("cmd")
+        .args(["/C", "ping", "-n", "4", TARGET])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("Failed to run ping: {e}"))?;
+    #[cfg(not(target_os = "windows"))]
+    let output = Command::new("ping")
+        .args(["-c", "4", TARGET])
+        .output()
+        .map_err(|e| format!("Failed to run ping: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let (attempts, responses, packet_loss) = parse_ping_packets(&stdout);
+    let average_ms = parse_ping_average(&stdout);
+    let success = output.status.success() && responses > 0;
+    let error = if success {
+        None
+    } else if !stderr.trim().is_empty() {
+        Some(stderr.trim().to_string())
+    } else if !stdout.trim().is_empty() {
+        Some(stdout.trim().to_string())
+    } else {
+        Some("Ping failed".to_string())
+    };
+
+    Ok(PingSummary {
+        success,
+        attempts,
+        responses,
+        packet_loss,
+        average_ms,
+        error,
+        target: TARGET.to_string(),
+        raw_output: stdout,
+    })
+}
+
+#[tauri::command]
 fn get_system_metrics() -> Result<SystemMetrics, String> {
     let mut system = System::new_all();
     system.refresh_memory();
@@ -503,6 +559,11 @@ fn get_app_context(category: String) -> Result<AppContextInfo, String> {
         category,
         details,
     })
+}
+
+#[tauri::command]
+fn exit_application(app: AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -773,6 +834,84 @@ fn powershell_output(script: &str) -> Result<String, String> {
 }
 
 #[cfg(target_os = "windows")]
+fn parse_ping_packets(output: &str) -> (u32, u32, Option<f64>) {
+    let mut attempts = 0;
+    let mut responses = 0;
+    let mut loss = None;
+    for line in output.lines() {
+        if line.contains("Packets:") {
+            for part in line.split(',') {
+                let trimmed = part.trim();
+                if let Some(value) = trimmed.strip_prefix("Sent = ") {
+                    attempts = value.trim().parse().unwrap_or(0);
+                } else if let Some(value) = trimmed.strip_prefix("Received = ") {
+                    responses = value.trim().parse().unwrap_or(0);
+                } else if let Some(value) = trimmed.split('(').nth(1) {
+                    if let Some(pct) = value.trim().strip_suffix("% loss)") {
+                        loss = pct.trim().parse().ok();
+                    }
+                }
+            }
+            break;
+        }
+    }
+    (attempts, responses, loss)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_ping_packets(output: &str) -> (u32, u32, Option<f64>) {
+    let mut attempts = 0;
+    let mut responses = 0;
+    let mut loss = None;
+    for line in output.lines() {
+        if line.contains("packets transmitted") && line.contains("packet loss") {
+            let parts: Vec<&str> = line.split(',').collect();
+            if let Some(sent) = parts.get(0) {
+                attempts = sent.trim().split_whitespace().next().unwrap_or("0").parse().unwrap_or(0);
+            }
+            if let Some(received) = parts.get(1) {
+                responses = received.trim().split_whitespace().next().unwrap_or("0").parse().unwrap_or(0);
+            }
+            if let Some(loss_part) = parts.iter().find(|p| p.contains("packet loss")) {
+                if let Some(percent) = loss_part.trim().split('%').next() {
+                    loss = percent.trim().parse().ok();
+                }
+            }
+            break;
+        }
+    }
+    (attempts, responses, loss)
+}
+
+#[cfg(target_os = "windows")]
+fn parse_ping_average(output: &str) -> Option<f64> {
+    for line in output.lines() {
+        if line.contains("Average =") {
+            if let Some(part) = line.split("Average = ").nth(1) {
+                let value = part.trim().trim_end_matches("ms");
+                return value.trim().parse().ok();
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+fn parse_ping_average(output: &str) -> Option<f64> {
+    for line in output.lines() {
+        if line.contains("min/avg/max") || line.contains("round-trip") {
+            if let Some(stats) = line.split('=').nth(1) {
+                let parts: Vec<&str> = stats.split('/').collect();
+                if parts.len() >= 2 {
+                    return parts[1].trim().parse().ok();
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
 fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
     let tray_menu = MenuBuilder::new(app)
         .text(TRAY_MENU_ID_SHOW, "Open Golpac Support")
@@ -820,7 +959,9 @@ fn main() {
             capture_screenshot,
             launch_quick_assist,
             get_system_metrics,
-            get_app_context
+            get_app_context,
+            test_internet_connection,
+            exit_application
         ])
         .setup(|app| {
             #[cfg(not(target_os = "windows"))]
