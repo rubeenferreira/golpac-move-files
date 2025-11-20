@@ -254,17 +254,41 @@ select:disabled {
 }
 
 .form-row.two-col.with-sage {
+  --sage-panel-width: clamp(320px, 34%, 480px);
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: flex-start;
-  margin-bottom: 0;
-  padding-bottom: 0;
+  padding-right: var(--sage-panel-width);
 }
 
 .form-row.two-col.with-sage > .field {
   min-width: 0;
-  max-width: none;
+  width: calc(100% - var(--sage-panel-width) - 12px);
+  max-width: calc(100% - var(--sage-panel-width) - 12px);
+}
+
+.form-row.two-col.with-sage .sage-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--sage-panel-width);
+  padding-left: 16px;
+}
+
+.form-row.two-col.with-sage > .field {
+  min-width: 0;
+  width: calc(100% - var(--sage-panel-width) - 12px);
+  max-width: calc(100% - var(--sage-panel-width) - 12px);
+}
+
+.form-row.two-col.with-sage .sage-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: var(--sage-panel-width);
+  padding-left: 16px;
 }
 
 .field {
@@ -483,11 +507,6 @@ textarea:focus {
   padding: 4px 0 0;
 }
 
-.form-row.two-col.with-sage .sage-panel {
-  position: static;
-  width: 100%;
-  padding-left: 0;
-}
 
 .sage-pill-grid {
   display: grid;
@@ -618,7 +637,7 @@ textarea:focus {
   grid-column: 1 / -1;
 }
 
-@media (max-width: 800px) {
+@media (max-width: 1150px) {
   .shell-header {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -629,7 +648,8 @@ textarea:focus {
   }
 
   .form-row.two-col,
-  .form-row.two-col.with-printers {
+  .form-row.two-col.with-printers,
+  .form-row.two-col.with-sage {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -638,17 +658,23 @@ textarea:focus {
   }
 
   .form-row.two-col.with-sage {
-    grid-template-columns: minmax(0, 1fr);
-    margin-bottom: 0;
-    padding-bottom: 0;
+    padding-right: 0;
   }
 
   .form-row.two-col.with-sage .sage-panel {
+    position: static;
     width: 100%;
     padding-left: 0;
+    margin-top: 8px;
   }
+
   .form-row.two-col.with-sage > .field {
+    width: 100%;
     max-width: 100%;
+  }
+
+  .sage-pill-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   }
 
   .submit-row {

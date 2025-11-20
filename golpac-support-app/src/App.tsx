@@ -180,6 +180,10 @@ function App() {
   const [vpnState, setVpnState] = useState<PingState>({ status: "idle" });
   const [showVpnDetails, setShowVpnDetails] = useState(false);
   const [lastVpnResult, setLastVpnResult] = useState<VpnStatus | null>(null);
+  const [avLoading, setAvLoading] = useState(false);
+  const [avItems, setAvItems] = useState<
+    { name: string; running: boolean; lastScan?: string | null }[]
+  >([]);
 
   const initialOffline =
     typeof navigator !== "undefined" ? !navigator.onLine : false;
@@ -367,6 +371,12 @@ function App() {
       setSelectedSageIssue(SAGE_ISSUE_OPTIONS[0].value);
     }
   }, [category]);
+
+  useEffect(() => {
+    if (activeNav === "troubleshoot") {
+      loadAntivirusStatus();
+    }
+  }, [activeNav]);
 
   // --- System info ---------------------------------------------------------
   async function loadSystemInfo(): Promise<SystemInfo> {
@@ -574,6 +584,28 @@ function App() {
       setScreenshotError("Could not attach that file. Please try again.");
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function loadAntivirusStatus() {
+    setAvLoading(true);
+    try {
+      const result = (await invoke("get_antivirus_status")) as {
+        name: string;
+        running: boolean;
+        last_scan?: string | null;
+      }[];
+      const normalized = (result || []).map((item) => ({
+        name: item.name,
+        running: !!item.running,
+        lastScan: item.last_scan ?? null,
+      }));
+      setAvItems(normalized);
+    } catch (err) {
+      console.error("Failed to load antivirus status:", err);
+      setAvItems([]);
+    } finally {
+      setAvLoading(false);
     }
   }
 
@@ -1196,6 +1228,7 @@ function App() {
               onVpnTest={handleVpnTest}
               showVpnDetails={showVpnDetails && !!vpnState.details}
               onToggleVpnDetails={() => setShowVpnDetails((prev) => !prev)}
+              antivirus={{ loading: avLoading, items: avItems }}
             />
           </main>
         ) : (

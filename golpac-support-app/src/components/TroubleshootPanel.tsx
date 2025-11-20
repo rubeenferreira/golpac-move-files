@@ -15,6 +15,10 @@ type TroubleshootPanelProps = {
   onVpnTest: () => void;
   showVpnDetails: boolean;
   onToggleVpnDetails: () => void;
+  antivirus: {
+    loading: boolean;
+    items: { name: string; running: boolean; lastScan?: string | null }[];
+  };
 };
 
 export function TroubleshootPanel({
@@ -26,6 +30,7 @@ export function TroubleshootPanel({
   onVpnTest,
   showVpnDetails,
   onToggleVpnDetails,
+  antivirus,
 }: TroubleshootPanelProps) {
   const isPingLoading = pingState.status === "loading";
   const isVpnLoading = vpnState.status === "loading";
@@ -67,9 +72,6 @@ export function TroubleshootPanel({
               "Test VPN connection"
             )}
           </button>
-          <button type="button" className="secondary-btn wide" disabled>
-            <span className="icon">🛰</span> Ping 3
-          </button>
         </div>
 
         {pingState.status !== "idle" && (
@@ -105,6 +107,41 @@ export function TroubleshootPanel({
             {showVpnDetails && vpnState.details && (
               <pre className="ping-details">{vpnState.details}</pre>
             )}
+          </div>
+        )}
+      </div>
+
+      <div className="troubleshoot-card">
+        <h2>Antivirus status</h2>
+        {antivirus.loading ? (
+          <div className="ping-result">
+            <p>Detecting antivirus products…</p>
+            <span className="inline-spinner" aria-hidden />
+          </div>
+        ) : antivirus.items.length === 0 ? (
+          <div className="ping-result">
+            <p>No supported antivirus products detected.</p>
+          </div>
+        ) : (
+          <div className="av-grid">
+            {antivirus.items.map((item) => (
+              <div key={item.name} className="av-card">
+                <div className="av-header">
+                  <strong>{item.name}</strong>
+                  <span className={`badge ${item.running ? "ok" : "warn"}`}>
+                    {item.running ? "Running" : "Not running"}
+                  </span>
+                </div>
+                <div className="av-meta">
+                  <span className="label">Last scan</span>
+                  <span className="value">
+                    {item.lastScan && item.lastScan.trim() !== ""
+                      ? item.lastScan
+                      : "Not available"}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>

@@ -115,6 +115,13 @@ struct VpnStatus {
     ip: Option<String>,
     timestamp: String,
 }
+
+#[derive(Serialize)]
+struct AvProduct {
+    name: String,
+    running: bool,
+    last_scan: Option<String>,
+}
 #[derive(Serialize)]
 struct PingSummary {
     success: bool,
@@ -619,6 +626,63 @@ fn get_app_context(category: String) -> Result<AppContextInfo, String> {
 }
 
 #[tauri::command]
+fn get_antivirus_status() -> Result<Vec<AvProduct>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+$products = @(
+  @{ Name = 'Webroot'; Processes = @('WRSA'); Services = @('WRSVC'); RegKey = 'HKLM:\SOFTWARE\WOW6432Node\Webroot\AV'; RegValue = 'LastScan' },
+  @{ Name = 'Checkpoint'; Processes = @('cpd','epwd'); Services = @('epwd'); RegKey = $null; RegValue = $null },
+  @{ Name = 'Malwarebytes'; Processes = @('MBAMService','mbam'); Services = @('MBAMService'); RegKey = 'HKLM:\SOFTWARE\Malwarebytes\MWAC'; RegValue = 'LastAssetScan' }
+)
+
+$results = @()
+foreach ($p in $products) {
+  $running = $false
+
+  foreach ($proc in $p.Processes) {
+    if (Get-Process -Name $proc -ErrorAction SilentlyContinue) { $running = $true; break }
+  }
+  if (-not $running -and $p.Services) {
+    foreach ($svc in $p.Services) {
+      $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
+      if ($service -and $service.Status -eq 'Running') { $running = $true; break }
+    }
+  }
+
+  $lastScan = $null
+  if ($p.RegKey -and (Test-Path $p.RegKey)) {
+    $val = (Get-ItemProperty -Path $p.RegKey -ErrorAction SilentlyContinue).$($p.RegValue)
+    if ($val) { $lastScan = $val }
+  }
+
+  $results += [PSCustomObject]@{
+    name = $p.Name
+    running = $running
+    lastScan = $lastScan
+  }
+}
+
+$results | ConvertTo-Json -Compress
+"#;
+
+        let output = powershell_output(script)?;
+        if output.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let parsed: Vec<AvProduct> =
+            serde_json::from_str(&output).map_err(|e| format!("Parse AV status failed: {e}"))?;
+        Ok(parsed)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
 fn get_vpn_status() -> Result<VpnStatus, String> {
     #[cfg(target_os = "windows")]
     {
@@ -1119,6 +1183,7 @@ fn main() {
             get_app_context,
             get_vpn_status,
             test_internet_connection,
+            get_antivirus_status,
             exit_application
         ])
         .setup(|app| {
