@@ -3,7 +3,7 @@
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use reqwest::blocking::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     process::Command,
@@ -116,7 +116,7 @@ struct VpnStatus {
     timestamp: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct AvProduct {
     name: String,
     running: bool,
