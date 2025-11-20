@@ -95,6 +95,44 @@ type PrinterCache = {
   updatedAt: string;
 };
 
+const SAGE_ISSUE_OPTIONS = [
+  {
+    value: "general",
+    label: "General Issues",
+    description: "Performance, database connection, user permissions",
+  },
+  {
+    value: "gl",
+    label: "General Ledger",
+    description: "Posting errors or ledger imbalances",
+  },
+  {
+    value: "ap",
+    label: "Accounts Payable",
+    description: "Vendor invoices, batches, or payment runs",
+  },
+  {
+    value: "ar",
+    label: "Accounts Receivable",
+    description: "Customer invoices, deposits, or statements",
+  },
+  {
+    value: "project",
+    label: "Project",
+    description: "Project module syncing or budgeting issues",
+  },
+  {
+    value: "job-costing",
+    label: "Job Costing",
+    description: "Job transactions or cost allocation problems",
+  },
+  {
+    value: "order-entry",
+    label: "Order Entry",
+    description: "Order processing or fulfillment errors",
+  },
+];
+
 function App() {
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -113,6 +151,9 @@ function App() {
   const [selectedPrinterName, setSelectedPrinterName] = useState<string>("");
   const [selectedPrinter, setSelectedPrinter] = useState<PrinterInfo | null>(
     null
+  );
+  const [selectedSageIssue, setSelectedSageIssue] = useState<string>(
+    SAGE_ISSUE_OPTIONS[0].value
   );
   const [printersLastUpdated, setPrintersLastUpdated] = useState<string | null>(
     null
@@ -145,6 +186,9 @@ function App() {
   const [isOffline, setIsOffline] = useState(initialOffline);
   const [showOfflineDialog, setShowOfflineDialog] = useState(initialOffline);
   const [offlineDismissed, setOfflineDismissed] = useState(false);
+  const currentSageIssue =
+    SAGE_ISSUE_OPTIONS.find((opt) => opt.value === selectedSageIssue) ||
+    SAGE_ISSUE_OPTIONS[0];
 
   // --- App version ---------------------------------------------------------
   useEffect(() => {
@@ -318,6 +362,9 @@ function App() {
       refreshAppContext(category);
     } else {
       setAppContextDetails(null);
+    }
+    if (cat !== "sage 300") {
+      setSelectedSageIssue(SAGE_ISSUE_OPTIONS[0].value);
     }
   }, [category]);
 
@@ -688,7 +735,7 @@ function App() {
 
       const createdAt = new Date().toISOString();
 
-      let printerInfo: string | null = null;
+      let categoryDetail: string | null = null;
       if (category === "Printers" && selectedPrinter) {
         const parts: string[] = [`Name: ${selectedPrinter.name}`];
 
@@ -699,7 +746,9 @@ function App() {
           parts.push(`Status: ${selectedPrinter.status}`);
         }
 
-        printerInfo = parts.join(" | ");
+        categoryDetail = parts.join(" | ");
+      } else if (category === "Sage 300" && currentSageIssue) {
+        categoryDetail = `Sage 300 issue: ${currentSageIssue.label} - ${currentSageIssue.description}`;
       }
 
       const payload = {
@@ -708,7 +757,7 @@ function App() {
         userEmail: userEmail || null,
         urgency,
         category,
-        printerInfo,
+        printerInfo: categoryDetail,
         screenshots,
         screenshot: screenshots[0] ?? null,
         systemMetrics,
@@ -900,7 +949,15 @@ function App() {
               </label>
             </div>
 
-            <div className="form-row two-col">
+            <div
+              className={`form-row two-col ${
+                category === "Printers"
+                  ? "with-printers"
+                  : category === "Sage 300"
+                  ? "with-sage"
+                  : ""
+              }`}
+            >
               <label className="field">
                 <span>Category</span>
                 <div className="select-wrapper">
@@ -918,12 +975,11 @@ function App() {
                   </select>
                 </div>
               </label>
-
-            {category === "Printers" && (
-              <div className="printer-panel">
-                <small className="field-hint">
-                  Select the printer you’re having issues with.
-                </small>
+              {category === "Printers" && (
+                <div className="printer-panel">
+                  <small className="field-hint">
+                    Select the printer you’re having issues with.
+                  </small>
 
                   <div className="printer-panel-body">
                     {printersLoading && (
@@ -934,38 +990,27 @@ function App() {
 
                     {!printersLoading && printersError && (
                       <div className="field-hint">
-                        {printersError} You can still describe the printer in
-                        the description box.
+                        {printersError} You can still describe the printer in the description box.
                       </div>
                     )}
 
-                    {!printersLoading &&
-                      !printersError &&
-                      printers.length === 0 && (
-                        <div className="field-hint">
-                          No printers were detected on this machine. Please
-                          mention the printer name in your description.
-                        </div>
-                      )}
+                    {!printersLoading && !printersError && printers.length === 0 && (
+                      <div className="field-hint">
+                        No printers were detected on this machine. Please mention the printer name in your description.
+                      </div>
+                    )}
 
-                    {!printersLoading &&
-                      !printersError &&
-                      printers.length > 0 && (
-                        <div className="select-wrapper">
-                          <select
-                            value={selectedPrinterName}
-                            onChange={(e) =>
-                              setSelectedPrinterName(e.target.value)
-                            }
-                          >
-                            {printers.map((p) => (
-                              <option key={p.name} value={p.name}>
-                                {p.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
+                    {!printersLoading && !printersError && printers.length > 0 && (
+                      <div className="select-wrapper">
+                        <select value={selectedPrinterName} onChange={(e) => setSelectedPrinterName(e.target.value)}>
+                          {printers.map((p) => (
+                            <option key={p.name} value={p.name}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
 
                   <div className="printer-panel-actions">
@@ -979,10 +1024,28 @@ function App() {
                     </button>
                     {printersLastUpdated && (
                       <small className="field-hint">
-                        Last updated:{" "}
-                        {new Date(printersLastUpdated).toLocaleString()}
+                        Last updated: {new Date(printersLastUpdated).toLocaleString()}
                       </small>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {category === "Sage 300" && (
+                <div className="sage-panel">
+                  <small className="field-hint">Select the Sage 300 area that best matches the issue.</small>
+                  <div className="sage-pill-grid">
+                    {SAGE_ISSUE_OPTIONS.map((option) => (
+                      <button
+                        type="button"
+                        key={option.value}
+                        className={`sage-pill ${selectedSageIssue === option.value ? "active" : ""}`}
+                        onClick={() => setSelectedSageIssue(option.value)}
+                      >
+                        <span className="pill-title">{option.label}</span>
+                        <span className="pill-desc">{option.description}</span>
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}

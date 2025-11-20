@@ -347,9 +347,6 @@ function formatSystemMetricsText(metrics) {
   if (!metrics) return null;
   const parts = [
     `Uptime: ${metrics.uptime_human} (${metrics.uptime_seconds || 0}s)`,
-    `Disk C: ${formatNumber(metrics.free_disk_c_gb)} GB free of ${formatNumber(
-      metrics.total_disk_c_gb
-    )} GB`,
     `CPU: ${metrics.cpu_brand || "Unknown processor"}`,
     `CPU usage: ${formatNumber(metrics.cpu_usage_percent)}%`,
     `Memory usage: ${formatNumber(metrics.memory_used_gb)} GB of ${formatNumber(
@@ -377,10 +374,6 @@ function formatSystemMetricsHtml(metrics) {
   if (!metrics) return "";
   const rows = [
     ["Uptime", `${escapeHtml(metrics.uptime_human || "")} (${metrics.uptime_seconds || 0}s)`],
-    [
-      "Disk C:",
-      `${formatNumber(metrics.free_disk_c_gb)} GB free of ${formatNumber(metrics.total_disk_c_gb)} GB`,
-    ],
     ["CPU", escapeHtml(metrics.cpu_brand || "Unknown processor")],
     ["CPU usage", `${formatNumber(metrics.cpu_usage_percent)}%`],
     [
