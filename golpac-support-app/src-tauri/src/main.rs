@@ -100,6 +100,8 @@ struct SystemMetrics {
     timestamp: String,
     disks: Vec<DiskSnapshot>,
     cpu_brand: Option<String>,
+    #[cfg(target_os = "windows")]
+    bitlocker: Vec<BitlockerVolume>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +123,15 @@ struct AvProduct {
     name: String,
     running: bool,
     last_scan: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Serialize, Clone, Default)]
+struct BitlockerVolume {
+    volume: String,
+    protection_status: String,
+    lock_status: String,
+    encryption_percentage: Option<f64>,
 }
 #[derive(Serialize)]
 struct PingSummary {
@@ -156,6 +167,83 @@ fn get_system_info() -> SystemInfo {
         ipv4,
         domain,
     }
+}
+
+#[cfg(target_os = "windows")]
+fn map_bitlocker_status(code: Option<u32>) -> String {
+    match code {
+        Some(0) => "Off".to_string(),
+        Some(1) => "On".to_string(),
+        Some(2) => "Unknown".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn map_bitlocker_lock(code: Option<u32>) -> String {
+    match code {
+        Some(0) => "Unlocked".to_string(),
+        Some(1) => "Locked".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_bitlocker_status() -> Vec<BitlockerVolume> {
+    #[derive(Deserialize)]
+    struct RawVolume {
+        #[serde(rename = "MountPoint")]
+        mount_point: Option<String>,
+        #[serde(rename = "ProtectionStatus")]
+        protection_status: Option<u32>,
+        #[serde(rename = "LockStatus")]
+        lock_status: Option<u32>,
+        #[serde(rename = "EncryptionPercentage")]
+        encryption_percentage: Option<f64>,
+    }
+
+    let output = Command::new("powershell")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-BitLockerVolume | Select-Object MountPoint,ProtectionStatus,LockStatus,EncryptionPercentage | ConvertTo-Json",
+        ])
+        .output();
+
+    let Ok(out) = output else { return Vec::new(); };
+    if !out.status.success() {
+        return Vec::new();
+    }
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let parsed: Result<Vec<RawVolume>, _> = serde_json::from_str(&text);
+    let volumes: Vec<RawVolume> = match parsed {
+        Ok(list) => list,
+        Err(_) => {
+            // Sometimes PowerShell returns a single object instead of an array.
+            if let Ok(single) = serde_json::from_str::<RawVolume>(&text) {
+                vec![single]
+            } else {
+                Vec::new()
+            }
+        }
+    };
+
+    volumes
+        .into_iter()
+        .map(|v| BitlockerVolume {
+            volume: v.mount_point.unwrap_or_else(|| "Unknown".to_string()),
+            protection_status: map_bitlocker_status(v.protection_status),
+            lock_status: map_bitlocker_lock(v.lock_status),
+            encryption_percentage: v.encryption_percentage,
+        })
+        .collect()
+}
+
+[cfg(not(target_os = "windows"))]
+fn get_bitlocker_status() -> Vec<BitlockerVolume> {
+    Vec::new()
 }
 
 //
@@ -589,6 +677,9 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
         .ok()
         .and_then(|r| r);
 
+    #[cfg(target_os = "windows")]
+    let bitlocker = get_bitlocker_status();
+
     Ok(SystemMetrics {
         uptime_seconds: uptime,
         uptime_human,
@@ -603,6 +694,8 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
         timestamp: Utc::now().to_rfc3339(),
         disks,
         cpu_brand,
+        #[cfg(target_os = "windows")]
+        bitlocker,
     })
 }
 

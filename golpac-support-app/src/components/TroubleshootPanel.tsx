@@ -132,14 +132,6 @@ export function TroubleshootPanel({
                     {item.running ? "Running" : "Not running"}
                   </span>
                 </div>
-                <div className="av-meta">
-                  <span className="label">Last scan</span>
-                  <span className="value">
-                    {item.lastScan && item.lastScan.trim() !== ""
-                      ? item.lastScan
-                      : "Not available"}
-                  </span>
-                </div>
               </div>
             ))}
           </div>

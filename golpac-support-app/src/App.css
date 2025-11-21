@@ -235,6 +235,12 @@ select:disabled {
   padding-top: 20px;
 }
 
+.ai-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 /* Form */
 
 .form {
