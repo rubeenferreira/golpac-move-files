@@ -241,7 +241,7 @@ fn get_bitlocker_status() -> Vec<BitlockerVolume> {
         .collect()
 }
 
-[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "windows"))]
 fn get_bitlocker_status() -> Vec<BitlockerVolume> {
     Vec::new()
 }

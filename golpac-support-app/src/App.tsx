@@ -678,6 +678,7 @@ function buildAiAnswer(question: string, recent: string[] = []): AiResponse {
     const normalizeTight = (s: string) => s.replace(/[^a-z0-9]/g, "");
     const corpusTight = normalizeTight(corpus);
     const qTight = normalizeTight(q);
+    const perfWords = ["slow", "lag", "laggy", "freeze", "freezing", "hung", "hanging", "stuck", "sluggish", "taking ages", "takes ages"];
 
     const includesAny = (
       parts: string[],
@@ -821,6 +822,21 @@ function buildAiAnswer(question: string, recent: string[] = []): AiResponse {
       return wrap("I don’t have the IP yet. Run Test internet connection or open the System tab, then ask again.");
     }
 
+    const perfSummary = () => {
+      if (!systemMetrics) return "I'll check CPU and memory to see what's heavy.";
+      const cpu = systemMetrics.cpu_usage_percent
+        ? `CPU about ${Math.round(systemMetrics.cpu_usage_percent)}%`
+        : null;
+      const ram =
+        systemMetrics.memory_used_gb && systemMetrics.memory_total_gb
+          ? `RAM ${systemMetrics.memory_used_gb.toFixed(1)} of ${systemMetrics.memory_total_gb.toFixed(1)} GB`
+          : null;
+      const pieces = [cpu, ram].filter(Boolean);
+      return pieces.length === 0
+        ? "I'll check CPU and memory to see what's heavy."
+        : `Current load: ${pieces.join(" • ")}.`;
+    };
+
     // Greetings
     const greetingWords = ["hello", "hi", "hey"];
     const topicalWords = ["printer", "sage", "vpn", "outlook", "email", "adobe", "pdf", "network", "internet", "error"];
@@ -853,6 +869,17 @@ function buildAiAnswer(question: string, recent: string[] = []): AiResponse {
         return wrap("I see you're online, but I don’t have a recent test. Run Troubleshoot → Test internet connection for details.");
       }
       return wrap("Network status is unclear. Run the internet test in Troubleshoot so I can quote the results.");
+    }
+
+    // General slowness / freezing (device-wide)
+    if (includesAny(perfWords)) {
+      const targetApps: string[] = [];
+      if (includesAny(["browser", "chrome", "edge", "firefox", "brwser"], q)) targetApps.push("browser");
+      if (includesAny(["outlook", "email", "o365", "office"], q)) targetApps.push("Outlook/email");
+      const appText = targetApps.length ? `, mainly ${targetApps.join(" and ")}` : "";
+      return wrap(
+        `Got it—things feel slow${appText}. ${perfSummary()} Try closing extra tabs/apps you don't need, then rerun the Test internet connection and VPN test if you use them. If it keeps freezing, submit a ticket so IT can review logs.`
+      );
     }
 
     // Sage 300 flow
