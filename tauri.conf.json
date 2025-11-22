@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "golpac-support-app",
+  "version": "0.1.0",
+  "identifier": "com.rubenferreira.golpac-support-app",
+  "updater": {
+    "active": true,
+    "dialog": true,
+    "endpoints": [
+      "https://raw.githubusercontent.com/rubeenferreira/golpac-move-files/main/updater.json"
+    ],
+    "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEyNEY3MzFDODVEMkE1MzkKUldRNXBkS0ZISE5Qb2pOR2FMdXJDRmdkZ0QxV2xUOFJjQnR1Q1lyYnJFdEdoM0I3RVMyZXMxM2kK"
+  },
+
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Golpac Support",
+        "width": 900,
+        "height": 650,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "windows": {
+      "installer": {
+        "type": "msi"
+      }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+
+  "plugins": {
+    "system-tray": {
+      "iconPath": "icons/icon.png",
+      "menu": [
+        {
+          "id": "show",
+          "text": "Open Golpac Support"
+        },
+        {
+          "id": "quit",
+          "text": "Quit Golpac Support"
+        }
+      ]
+    }
+  }
+}
