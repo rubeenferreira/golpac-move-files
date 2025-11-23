@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { buildAiAnswer } from "./ai/aiLogic";
 import golpacLogo from "./assets/golpac-logo.png";
 import { SystemPanel } from "./components/SystemPanel";
 import { TroubleshootPanel } from "./components/TroubleshootPanel";
@@ -94,13 +95,6 @@ const PRINTER_CACHE_KEY = "golpac-printers-cache";
 type PrinterCache = {
   printers: PrinterInfo[];
   updatedAt: string;
-};
-
-type AiResponse = {
-  answer: string;
-  followUp?: string;
-  followUpDelayMs?: number;
-  followUpQuestion?: string;
 };
 
 const SAGE_ISSUE_OPTIONS = [
@@ -199,6 +193,10 @@ function App() {
   const [aiTimer, setAiTimer] = useState<number | null>(null);
   const [aiFollowUpTimer, setAiFollowUpTimer] = useState<number | null>(null);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState<null | { version: string; notes?: string }>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
 
   const initialOffline =
     typeof navigator !== "undefined" ? !navigator.onLine : false;
@@ -214,7 +212,22 @@ function App() {
     getVersion()
       .then((v) => setAppVersion(v))
       .catch((err) => console.error("Failed to get app version:", err));
+
+    // Weekly update check on startup
+    const lastCheck = localStorage.getItem("golpac-update-last-check");
+    const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    if (!lastCheck || now - Number(lastCheck) > oneWeekMs) {
+      performUpdateCheck(false);
+    }
   }, []);
+
+  // Auto-dismiss update errors after a few seconds
+  useEffect(() => {
+    if (!updateError) return;
+    const timer = window.setTimeout(() => setUpdateError(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [updateError]);
 
   // --- Close → hide + notification (once per session) ----------------------
   useEffect(() => {
@@ -619,14 +632,11 @@ function App() {
         running: boolean;
         last_scan?: string | null;
       }[];
-      const normalized = (result || [])
-        .map((item) => ({
-          name: item.name,
-          running: !!item.running,
-          lastScan: item.last_scan ?? null,
-        }))
-        // Only keep detected products (running or have data)
-        .filter((item) => item.running || (item.lastScan && item.lastScan.trim() !== ""));
+      const normalized = (result || []).map((item) => ({
+        name: item.name,
+        running: !!item.running,
+        lastScan: item.last_scan ?? null,
+      }));
       setAvItems(normalized);
     } catch (err) {
       console.error("Failed to load antivirus status:", err);
@@ -671,399 +681,81 @@ function App() {
     }
   }
 
-function buildAiAnswer(question: string, recent: string[] = []): AiResponse {
-    const q = question.trim().toLowerCase();
-    const recentTexts = recent.map((r) => r.toLowerCase());
-    const corpus = [q, ...recentTexts].join(" ");
-    const normalizeTight = (s: string) => s.replace(/[^a-z0-9]/g, "");
-    const corpusTight = normalizeTight(corpus);
-    const qTight = normalizeTight(q);
-    const perfWords = ["slow", "lag", "laggy", "freeze", "freezing", "hung", "hanging", "stuck", "sluggish", "taking ages", "takes ages"];
-
-    const includesAny = (
-      parts: string[],
-      haystack: string = corpus,
-      haystackTight: string = corpusTight
-    ) =>
-      parts.some((pRaw) => {
-        const p = pRaw.toLowerCase();
-        const pTight = normalizeTight(p);
-        return (
-          haystack.includes(p) ||
-          haystackTight.includes(pTight)
-        );
-      });
-    const currentIncludesAny = (parts: string[]) =>
-      includesAny(parts, q, qTight);
-    const wrap = (answer: string): AiResponse => ({ answer });
-
-    const findSageModule = () =>
-      SAGE_ISSUE_OPTIONS.find((opt) =>
-        corpus.includes(opt.label.toLowerCase())
-      );
-    const sageGeneralSymptom = includesAny([
-      "freeze",
-      "freezing",
-      "crash",
-      "crashing",
-      "slow",
-      "lag",
-      "hang",
-      "spinning",
-      "not responding",
-    ]);
-    const isErrorMention =
-      includesAny(["error", "code", "failure", "not working", "issue"]);
-    const pickFollowUp = (what: string) =>
-      Math.random() < 0.5
-        ? `Still analyzing… everything looks OK on this system. If you still see the ${what}, please submit a ticket to IT.`
-        : `Still analyzing… I couldn't auto-resolve the ${what}. Please submit a ticket to IT so they can help.`;
-
-    const topicTokens = {
-      sage: ["sage", "sgae", "accpac", "sage300", "sage 300", "sge", "sag"],
-      printer: ["printer", "printers", "prnter", "print", "priner", "printere"],
-      adobe: ["adobe", "adob", "acrobat", "reader", "acrobt", "pdf"],
-      outlook: ["outlook", "outlok", "email", "mail", "office", "o365", "365"],
-      vpn: ["vpn", "vnp", "vpv"],
-      antivirus: [
-        "antivirus",
-        "antivrus",
-        "webroot",
-        "webrrot",
-        "checkpoint",
-        "check point",
-        "malwarebytes",
-        "malware bytes",
-        "malwarebyte",
-      ],
-      network: [
-        "network",
-        "internet",
-        "online",
-        "offline",
-        "connected",
-        "connection",
-        "wifi",
-        "ethernet",
-        "lan",
-      ],
-    };
-
-    const topicFromText = (text: string): string | null => {
-      const tLower = text.toLowerCase();
-      const tTight = normalizeTight(tLower);
-      const hasTokens = (arr: string[]) =>
-        arr.some((tok) => {
-          const tokLower = tok.toLowerCase();
-          const tokTight = normalizeTight(tokLower);
-          return tLower.includes(tokLower) || tTight.includes(tokTight);
-        });
-
-      if (hasTokens(topicTokens.sage)) return "sage";
-      if (hasTokens(topicTokens.printer)) return "printer";
-      if (hasTokens(topicTokens.adobe)) return "adobe";
-      if (hasTokens(topicTokens.outlook)) return "outlook";
-      if (hasTokens(topicTokens.vpn)) return "vpn";
-      if (hasTokens(topicTokens.antivirus)) return "antivirus";
-      if (hasTokens(topicTokens.network)) return "network";
-      return null;
-    };
-    const topicFromContext = (): string | null => {
-      if (includesAny(["sage", "accpac"])) return "sage";
-      if (includesAny(["printer"])) return "printer";
-      if (includesAny(["adobe", "pdf"])) return "adobe";
-      if (includesAny(["outlook", "email", "office"])) return "outlook";
-      if (includesAny(["vpn"])) return "vpn";
-      if (includesAny(["antivirus", "webroot", "checkpoint", "malwarebytes"]))
-        return "antivirus";
-      if (includesAny(["network", "internet", "online", "connected"]))
-        return "network";
-      return null;
-    };
-    const currentTopic = topicFromText(question);
-    const topic = currentTopic || topicFromContext();
-    const topicMentions = (name: string) =>
-      [question, ...recent].filter((t) => topicFromText(t) === name).length;
-    const hasIssueWords = (text: string) =>
-      [
-        "error",
-        "code",
-        "fail",
-        "issue",
-        "won't",
-        "cannot",
-        "can't",
-        "not working",
-        "freeze",
-        "freezing",
-        "crash",
-        "crashing",
-        "hang",
-        "stuck",
-        "slow",
-      ].some((w) => text.toLowerCase().includes(w));
-    const recentIssueMention = hasIssueWords(question) || recent.some(hasIssueWords);
-    const knownHostname =
-      systemOverview?.hostname ||
-      (systemMetrics as any)?.hostname ||
-      null;
-    const knownIp = systemOverview?.ipv4 || null;
-    const systemNameWords = ["system name", "computer name", "hostname", "device name", "machine name"];
-    if (currentIncludesAny(systemNameWords) || includesAny(systemNameWords, q)) {
-      if (knownHostname) {
-        return wrap(`This device name appears as: ${knownHostname}.`);
-      }
-      return wrap("I don’t have the computer name yet. Open the System tab to refresh metrics, then ask again.");
+  async function handleLaunchAntivirus(name: string) {
+    try {
+      await invoke("launch_antivirus", { product: name });
+    } catch (err) {
+      console.error("Failed to launch antivirus:", err);
     }
-    if (includesAny(["ip address", "ipv4", "my ip"], q)) {
-      if (knownIp) {
-        return wrap(`IPv4 on record: ${knownIp}.`);
-      }
-      return wrap("I don’t have the IP yet. Run Test internet connection or open the System tab, then ask again.");
-    }
-
-    const perfSummary = () => {
-      if (!systemMetrics) return "I'll check CPU and memory to see what's heavy.";
-      const cpu = systemMetrics.cpu_usage_percent
-        ? `CPU about ${Math.round(systemMetrics.cpu_usage_percent)}%`
-        : null;
-      const ram =
-        systemMetrics.memory_used_gb && systemMetrics.memory_total_gb
-          ? `RAM ${systemMetrics.memory_used_gb.toFixed(1)} of ${systemMetrics.memory_total_gb.toFixed(1)} GB`
-          : null;
-      const pieces = [cpu, ram].filter(Boolean);
-      return pieces.length === 0
-        ? "I'll check CPU and memory to see what's heavy."
-        : `Current load: ${pieces.join(" • ")}.`;
-    };
-
-    // Greetings
-    const greetingWords = ["hello", "hi", "hey"];
-    const topicalWords = ["printer", "sage", "vpn", "outlook", "email", "adobe", "pdf", "network", "internet", "error"];
-    if (currentIncludesAny(greetingWords) && !includesAny(topicalWords)) {
-      if (isOffline)
-        return wrap("Hi! I can spot the device is offline. Want me to help you confirm connectivity or VPN?");
-      if (pingState.status === "success" && pingState.result) {
-        const r = pingState.result;
-        const avg = r.average_ms ? `${Math.round(r.average_ms)} ms` : "n/a";
-        return wrap(
-          `Hi! You're online (ping ${r.target}, avg ${avg}). Tell me what’s up with printers, Sage, Outlook/email, VPN, or Adobe and I’ll help.`
-        );
-      }
-      return wrap("Hi! How can I help? Mention printers, Sage, Outlook/email, VPN, or Adobe and I'll guide you.");
-    }
-
-    // Network status
-    if (topic === "network") {
-      if (isOffline) {
-        return wrap("The device appears offline. Run Troubleshoot → Test internet connection and check Wi‑Fi/cable. If it stays offline, call 888-585-0271.");
-      }
-      if (pingState.status === "success" && pingState.result) {
-        const r = pingState.result;
-        const avg = r.average_ms ? `${Math.round(r.average_ms)} ms` : "n/a";
-        return wrap(
-          `Network looks good. Ping to ${r.target} succeeded (${r.responses}/${r.attempts}, avg ${avg}). If an app still fails, try VPN if required or re-run the test.`
-        );
-      }
-      if (typeof navigator !== "undefined" && navigator.onLine) {
-        return wrap("I see you're online, but I don’t have a recent test. Run Troubleshoot → Test internet connection for details.");
-      }
-      return wrap("Network status is unclear. Run the internet test in Troubleshoot so I can quote the results.");
-    }
-
-    // General slowness / freezing (device-wide)
-    if (includesAny(perfWords)) {
-      const targetApps: string[] = [];
-      if (includesAny(["browser", "chrome", "edge", "firefox", "brwser"], q)) targetApps.push("browser");
-      if (includesAny(["outlook", "email", "o365", "office"], q)) targetApps.push("Outlook/email");
-      const appText = targetApps.length ? `, mainly ${targetApps.join(" and ")}` : "";
-      return wrap(
-        `Got it—things feel slow${appText}. ${perfSummary()} Try closing extra tabs/apps you don't need, then rerun the Test internet connection and VPN test if you use them. If it keeps freezing, submit a ticket so IT can review logs.`
-      );
-    }
-
-    // Sage 300 flow
-    if (topic === "sage") {
-      const moduleHit = findSageModule();
-      const quoted = question.match(/["“](.+?)["”]/);
-      if (quoted && quoted[1]) {
-        return {
-          answer: `I captured the Sage 300 error: “${quoted[1]}”${moduleHit ? ` in ${moduleHit.label}` : ""}. Quick try: close Sage, count to five, reopen, and retry. If it keeps failing, I’ll send the error to IT.`,
-          followUp: "Still analyzing… I couldn’t auto-fix this. Please submit a ticket with the module and that error so IT can dig in.",
-        };
-      }
-      if (moduleHit && isErrorMention) {
-        return {
-          answer: `Got it—Sage 300 is having trouble in ${moduleHit.label}. Paste the exact error or code so I can capture it for IT. If it’s blocking work, call 888-585-0271.`,
-          followUp: "Still analyzing… no quick fix found. Submit a ticket with the module and error so IT can handle it.",
-        };
-      }
-      if (sageGeneralSymptom && !moduleHit) {
-        return {
-          answer:
-            "Sounds like Sage is freezing/crashing/slow. Treat this as a General Issues case: try closing Sage, wait 10 seconds, reopen, and test again. Which module were you in when it happened?",
-          followUp: pickFollowUp("Sage 300 performance issue"),
-        };
-      }
-      if (moduleHit) {
-        return {
-          answer: `Noted: Sage 300 module "${moduleHit.label}". What’s the exact error or symptom? Paste it here and I’ll pass it to IT if needed.`,
-          followUp: "Still analyzing… I couldn't resolve it automatically. Please submit a ticket with the module and error so IT can help.",
-        };
-      }
-      const moduleList = SAGE_ISSUE_OPTIONS.map((m) => m.label).join(", ");
-      return wrap(
-        `Tell me which Sage 300 module you’re in (${moduleList}). Then share the exact error text so I can capture it for IT.`
-      );
-    }
-
-    // Outlook / Email
-    if (topic === "outlook") {
-      const seen = topicMentions("outlook");
-      const alreadyDetailed = recentIssueMention;
-      if (seen < 2 && !alreadyDetailed) {
-        return wrap(
-          "Noted Outlook/email. I see this device is online. What exactly is happening (send/receive, auth prompt, stuck emails)?"
-        );
-      }
-      return {
-        answer:
-          "Understood—email/Outlook issue. Paste the exact error or describe the behavior (send/receive, auth prompt, stuck in Outbox). If VPN is required, make sure it’s on.",
-        followUp: pickFollowUp("email/Outlook issue"),
-      };
-    }
-
-    // Adobe / PDF
-    if (topic === "adobe") {
-      const seen = topicMentions("adobe");
-      const adobeHasIssue =
-        recentIssueMention || includesAny(["won't open", "cannot open", "crash", "freeze", "freezing", "license", "slow", "stuck"], corpus);
-      const adobeProduct = includesAny(["reader"], corpus)
-        ? "Adobe Reader"
-        : includesAny(["acrobat"], corpus)
-        ? "Adobe Acrobat"
-        : null;
-      if (q.includes("running")) {
-        return wrap(
-          "I can’t confirm if Adobe is currently running from here. If it opens, great—if it crashes or won’t open, tell me the exact message so I can pass it to IT."
-        );
-      }
-      if (includesAny(["license", "licensing", "subscription", "serial"])) {
-        return {
-          answer:
-            "Sounds like an Adobe licensing/activation issue. Are you signed in with the right Adobe account? Paste the exact licensing or activation error and I’ll pass it to IT if needed.",
-          followUp: pickFollowUp("Adobe licensing issue"),
-        };
-      }
-      if (includesAny(["pdf", "open", "won't open", "cannot open"], q)) {
-        return {
-          answer:
-            "Got it—PDF won’t open. Does Adobe Acrobat/Reader launch? Share the exact error and whether other PDFs open fine.",
-          followUp: pickFollowUp("PDF opening issue"),
-        };
-      }
-      if (adobeProduct && !adobeHasIssue) {
-        return wrap(
-          `${adobeProduct} noted. What’s happening with it (freezing, crashing, errors, won’t open)?`
-        );
-      }
-      if (adobeHasIssue) {
-        return {
-          answer: `Captured an Adobe issue${adobeProduct ? ` on ${adobeProduct}` : ""}. If it’s freezing or crashing, try closing it fully, wait 10 seconds, then reopen and test another PDF. Paste the exact error text if you see one.`,
-          followUp: pickFollowUp("Adobe issue"),
-        };
-      }
-      if (seen < 2) {
-        return wrap(
-          "Adobe detected. Tell me which Adobe app/version you’re using (Reader/Acrobat) and what’s happening."
-        );
-      }
-      return {
-        answer:
-          "Adobe question noted. Paste the exact Adobe product/version and the error you see, and I’ll pass it to IT if needed.",
-        followUp: pickFollowUp("Adobe issue"),
-      };
-    }
-
-    // Printers
-    if (topic === "printer") {
-      if (printers.length) {
-        const match = printers.find((p) => {
-          const nm = p.name?.toLowerCase() || "";
-          const ip = p.ip?.toLowerCase() || "";
-          return (nm && q.includes(nm)) || (ip && q.includes(ip));
-        });
-        if (match) {
-          const parts = [
-            `Found printer "${match.name}"`,
-            match.ip ? `IP ${match.ip}` : null,
-          ].filter(Boolean);
-          return wrap(
-            `${parts.join(" • ")}. What issue are you seeing (offline, jam, driver, not printing)?`
-          );
-        }
-        const list = printers.map((p) => p.name).join(", ");
-        return wrap(
-          `I see these printers: ${list}. Which one is failing and what’s the error (offline, jam, driver)?`
-        );
-      }
-      return wrap("No printers detected here. Tell me the printer name/IP and the problem so IT can assist.");
-    }
-
-    // VPN
-    if (topic === "vpn") {
-      if (lastVpnResult?.active) {
-        const seen = topicMentions("vpn");
-        if (seen < 2 && !recentIssueMention) {
-          return wrap(
-            `VPN is connected (${lastVpnResult.name || "VPN"}${lastVpnResult.ip ? `, IP ${lastVpnResult.ip}` : ""}). What issue are you seeing?`
-          );
-        }
-        return {
-          answer: `VPN reports connected (${lastVpnResult.name || "VPN"}${lastVpnResult.ip ? `, IP ${lastVpnResult.ip}` : ""}). Share any auth/connection error you see so I can capture it.`,
-          followUp: pickFollowUp("VPN connection issue"),
-        };
-      }
-      return {
-        answer: "VPN isn’t connected. Are you using the Golpac VPN? If so, try reconnecting and share any auth/error text you see.",
-        followUp: pickFollowUp("VPN connection issue"),
-      };
-    }
-
-    // Antivirus
-    if (topic === "antivirus") {
-      if (avItems.length) {
-        const status = avItems
-          .map((item) => `${item.name}: ${item.running ? "running" : "not running"}`)
-          .join(" | ");
-        return wrap(`AV status: ${status}. If something shows as not running, restart and tell IT if it stays off.`);
-      }
-      return wrap("I don’t see Webroot/Checkpoint/Malwarebytes running. If you believe AV is installed, tell me which one.");
-    }
-
-    // Generic error
-    if (isErrorMention) {
-      const quoted = question.match(/["“](.+?)["”]/);
-      if (quoted && quoted[1]) {
-        return {
-          answer: `I captured this error: “${quoted[1]}.” Quick try: close the app, wait 5 seconds, reopen, and retry.`,
-          followUp: pickFollowUp("error"),
-        };
-      }
-      return {
-        answer: "You mentioned an error. Paste the exact wording or code and I’ll capture it for IT. If it keeps blocking you, submit a ticket or call 888-585-0271.",
-        followUp: pickFollowUp("issue"),
-      };
-    }
-
-    return wrap("I can help with printers, VPN, internet checks, Sage/Adobe/Outlook issues, and antivirus status. Tell me what’s happening.");
   }
+
+  async function performUpdateCheck(manual: boolean) {
+    setUpdateError(null);
+    setUpdateChecking(true);
+    try {
+      const updater = (window as any).__TAURI__?.updater;
+      if (!updater) {
+        if (manual) setUpdateError("Updater not available in this build.");
+        return;
+      }
+      const result = await updater.checkUpdate();
+      if (result.shouldUpdate && result.manifest) {
+        setUpdateAvailable({
+          version: result.manifest.version,
+          notes: result.manifest.body,
+        });
+      } else if (manual) {
+        setUpdateAvailable(null);
+        setUpdateError("You're already on the latest version.");
+      }
+      localStorage.setItem("golpac-update-last-check", Date.now().toString());
+    } catch (err) {
+      console.error("Update check failed:", err);
+      if (manual) {
+        setUpdateError("Could not check for updates. Please try again later.");
+      }
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!updateAvailable) return;
+    setUpdateInstalling(true);
+    setUpdateError(null);
+    try {
+      const updater = (window as any).__TAURI__?.updater;
+      if (!updater) {
+        setUpdateError("Updater not available in this build.");
+        setUpdateInstalling(false);
+        return;
+      }
+      await updater.installUpdate();
+      const proc = (window as any).__TAURI__?.process;
+      if (proc?.relaunch) {
+        await proc.relaunch();
+      }
+    } catch (err) {
+      console.error("Install update failed:", err);
+      setUpdateError("Failed to install the update. Please try again later.");
+    } finally {
+      setUpdateInstalling(false);
+    }
+  }
+
 
   function handleAskAi() {
     const question = aiQuestion.trim();
     if (!question) return;
     const recent = aiHistory.slice(-3).map((m) => m.question);
-    const response = buildAiAnswer(question, recent);
+    const response = buildAiAnswer(question, recent, {
+      isOffline,
+      pingState,
+      printers,
+      lastVpnResult,
+      avItems,
+      systemMetrics,
+    });
     const baseId = Date.now();
     setAiHistory((prev) =>
       [...prev, { id: baseId, question, answer: response.answer }].slice(-50)
@@ -1713,6 +1405,7 @@ function buildAiAnswer(question: string, recent: string[] = []): AiResponse {
               showVpnDetails={showVpnDetails && !!vpnState.details}
               onToggleVpnDetails={() => setShowVpnDetails((prev) => !prev)}
               antivirus={{ loading: avLoading, items: avItems }}
+              onLaunchAntivirus={handleLaunchAntivirus}
             />
           </main>
         ) : activeNav === "ai" ? (
@@ -1737,10 +1430,49 @@ function buildAiAnswer(question: string, recent: string[] = []): AiResponse {
           </main>
         )}
 
+        {updateAvailable && (
+          <div className="status status-info update-banner">
+            <div>
+              Update available: v{updateAvailable.version}
+              {updateAvailable.notes ? (
+                <span className="update-notes">
+                  {" "}
+                  · {updateAvailable.notes.substring(0, 120)}
+                  {updateAvailable.notes.length > 120 ? "..." : ""}
+                </span>
+              ) : null}
+            </div>
+            <div className="update-actions">
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={handleInstallUpdate}
+                disabled={updateInstalling}
+              >
+                {updateInstalling ? "Installing…" : "Install update"}
+              </button>
+            </div>
+          </div>
+        )}
+        {updateError && (
+          <div className="status status-error update-banner">
+            {updateError}
+          </div>
+        )}
+
         <footer className="shell-footer">
           <span>Golpac LLC</span>
           <span className="dot">•</span>
           <span>For urgent issues call: 888-585-0271</span>
+          <span className="dot">•</span>
+          <button
+            type="button"
+            className="update-check-btn"
+            onClick={() => performUpdateCheck(true)}
+            disabled={updateChecking || updateInstalling}
+          >
+            {updateChecking ? "Checking updates…" : "Check for updates"}
+          </button>
         </footer>
       </div>
       {(showOfflineDialog && !offlineDismissed) && (

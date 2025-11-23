@@ -24,6 +24,8 @@ use std::{
     time::Instant,
 };
 #[cfg(target_os = "windows")]
+use std::path::Path;
+#[cfg(target_os = "windows")]
 use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App};
 #[cfg(target_os = "windows")]
 use tauri_plugin_notification::{NotificationExt, PermissionState};
@@ -125,7 +127,6 @@ struct AvProduct {
     last_scan: Option<String>,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Serialize, Clone, Default)]
 struct BitlockerVolume {
     volume: String,
@@ -244,6 +245,43 @@ fn get_bitlocker_status() -> Vec<BitlockerVolume> {
 #[cfg(not(target_os = "windows"))]
 fn get_bitlocker_status() -> Vec<BitlockerVolume> {
     Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn launch_antivirus_impl(product: String) -> Result<(), String> {
+    let name = product.to_lowercase();
+    let mut candidates: Vec<&str> = Vec::new();
+    if name.contains("webroot") {
+        candidates.push(r"C:\Program Files\Webroot\WRSA.exe");
+        candidates.push(r"C:\Program Files (x86)\Webroot\WRSA.exe");
+    } else if name.contains("malwarebytes") {
+        candidates.push(r"C:\Program Files\Malwarebytes\Anti-Malware\mbam.exe");
+        candidates.push(r"C:\Program Files\Malwarebytes\Anti-Malware\MBAMService.exe");
+    } else if name.contains("checkpoint") || name.contains("check point") {
+        candidates.push(r"C:\Program Files (x86)\CheckPoint\Endpoint Security\Endpoint Connect\trac.exe");
+    }
+    // last resort try raw
+    candidates.push(&product);
+
+    for path in candidates {
+        let cmd_path = Path::new(path);
+        let target = if cmd_path.exists() {
+            cmd_path.to_path_buf()
+        } else {
+            PathBuf::from(path)
+        };
+        let result = Command::new(target).creation_flags(CREATE_NO_WINDOW).spawn();
+        if result.is_ok() {
+            return Ok(());
+        }
+    }
+
+    Err("Could not launch antivirus process".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn launch_antivirus_impl(_product: String) -> Result<(), String> {
+    Err("Launching antivirus is only supported on Windows.".to_string())
 }
 
 //
@@ -870,6 +908,11 @@ fn launch_quick_assist() -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn launch_antivirus(product: String) -> Result<(), String> {
+    launch_antivirus_impl(product)
+}
+
 #[cfg(target_os = "windows")]
 fn ensure_notification_permission(app_handle: &AppHandle) {
     if let Ok(state) = app_handle.notification().permission_state() {
@@ -1277,6 +1320,7 @@ fn main() {
             get_vpn_status,
             test_internet_connection,
             get_antivirus_status,
+            launch_antivirus,
             exit_application
         ])
         .setup(|app| {

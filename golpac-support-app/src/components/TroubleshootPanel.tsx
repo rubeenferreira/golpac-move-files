@@ -4,6 +4,12 @@ export type PingPanelState = {
   status: "idle" | "loading" | "success" | "error";
   message?: string;
   details?: string | null;
+  result?: {
+    average_ms?: number | null;
+    target?: string;
+    responses?: number;
+    attempts?: number;
+  };
 };
 
 type TroubleshootPanelProps = {
@@ -19,6 +25,7 @@ type TroubleshootPanelProps = {
     loading: boolean;
     items: { name: string; running: boolean; lastScan?: string | null }[];
   };
+  onLaunchAntivirus?: (name: string) => void;
 };
 
 export function TroubleshootPanel({
@@ -31,6 +38,7 @@ export function TroubleshootPanel({
   showVpnDetails,
   onToggleVpnDetails,
   antivirus,
+  onLaunchAntivirus,
 }: TroubleshootPanelProps) {
   const isPingLoading = pingState.status === "loading";
   const isVpnLoading = vpnState.status === "loading";
@@ -132,6 +140,15 @@ export function TroubleshootPanel({
                     {item.running ? "Running" : "Not running"}
                   </span>
                 </div>
+                {!item.running && onLaunchAntivirus && (
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => onLaunchAntivirus(item.name)}
+                  >
+                    Launch {item.name}
+                  </button>
+                )}
               </div>
             ))}
           </div>
