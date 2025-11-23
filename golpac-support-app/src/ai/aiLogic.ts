@@ -27,6 +27,15 @@ const SAGE_ISSUE_OPTIONS = [
   { value: "job", label: "Job Costing" },
   { value: "order", label: "Order Entry" },
 ];
+const SAGE_MODULE_TOKENS: Record<string, string[]> = {
+  "General Issues": ["general", "general issues", "performance", "slow", "freeze", "crash"],
+  "General Ledger": ["gl", "general ledger", "ledger"],
+  "Accounts Payable": ["ap", "accounts payable", "payable"],
+  "Accounts Receivable": ["ar", "accounts receivable", "receivable"],
+  Project: ["project"],
+  "Job Costing": ["job costing", "job"],
+  "Order Entry": ["order entry", "order"],
+};
 
 type AiContext = {
   isOffline: boolean;
@@ -56,8 +65,20 @@ export function buildAiAnswer(question: string, recent: string[] = [], ctx: AiCo
   const currentIncludesAny = (parts: string[]) => includesAny(parts, q, qTight);
   const wrap = (answer: string): AiResponse => ({ answer });
 
+  const findSageModuleFromText = (text: string): { value: string; label: string } | null => {
+    const lower = text.toLowerCase();
+    for (const opt of SAGE_ISSUE_OPTIONS) {
+      const tokens = SAGE_MODULE_TOKENS[opt.label] || [];
+      if (tokens.some((tok) => lower.includes(tok))) return opt;
+      if (lower.includes(opt.label.toLowerCase())) return opt;
+    }
+    return null;
+  };
+
   const findSageModule = () =>
-    SAGE_ISSUE_OPTIONS.find((opt) => corpus.includes(opt.label.toLowerCase()));
+    findSageModuleFromText(question) ||
+    findSageModuleFromText(corpus) ||
+    recentTexts.map(findSageModuleFromText).find(Boolean);
   const isErrorMention = includesAny(["error", "code", "failure", "not working", "issue"]);
   const pickFollowUp = (what: string) =>
     Math.random() < 0.2
@@ -96,7 +117,11 @@ export function buildAiAnswer(question: string, recent: string[] = [], ctx: AiCo
     return null;
   };
 
-  const topic = topicFromText(question) || topicFromText(corpus);
+  const hasSageModuleHint = !!findSageModuleFromText(corpus);
+  const topic =
+    topicFromText(question) ||
+    topicFromText(corpus) ||
+    (hasSageModuleHint ? "sage" : null);
   const topicMentions = (name: string) => [question, ...recent].filter((t) => topicFromText(t) === name).length;
   const hasIssueWords = (text: string) =>
     [
@@ -147,16 +172,30 @@ export function buildAiAnswer(question: string, recent: string[] = [], ctx: AiCo
   if (topic === "sage") {
     const moduleHit = findSageModule();
     const quoted = question.match(/["“](.+?)["”]/);
+    const codeMatch = q.match(/error[:\s#-]*([A-Za-z0-9._-]+)/i);
     if (quoted && quoted[1]) {
       return {
         answer: `I captured the Sage 300 error: “${quoted[1]}”${moduleHit ? ` in ${moduleHit.label}` : ""}. Quick try: close Sage, count to five, reopen, and retry. If it keeps failing, I’ll send the error to IT.`,
         followUp: "Still analyzing… I couldn’t auto-fix this. Please submit a ticket with the module and that error so IT can dig in.",
       };
     }
+    if (moduleHit && codeMatch && codeMatch[1]) {
+      const code = codeMatch[1];
+      return {
+        answer: `Sage 300 ${moduleHit.label} error ${code} captured. Analyzing and trying to solve. If it persists, submit a ticket with this code so IT can dig in.`,
+        followUp: pickFollowUp(`Sage 300 ${moduleHit.label} error ${code}`),
+      };
+    }
     if (moduleHit && isErrorMention) {
       return {
         answer: `Got it—Sage 300 is having trouble in ${moduleHit.label}. Paste the exact error or code so I can capture it for IT. If it’s blocking work, call 888-585-0271.`,
         followUp: "Still analyzing… no quick fix found. Submit a ticket with the module and error so IT can handle it.",
+      };
+    }
+    if (moduleHit && recentIssueMention) {
+      return {
+        answer: `Captured a Sage 300 issue in ${moduleHit.label}. If you have the exact error text or code, paste it and I’ll log it for IT. Quick try: close Sage, wait 10 seconds, reopen, and retry.`,
+        followUp: pickFollowUp(`Sage 300 ${moduleHit.label} issue`),
       };
     }
     const moduleList = SAGE_ISSUE_OPTIONS.map((m) => m.label).join(", ");

@@ -182,6 +182,7 @@ function App() {
   const [vpnState, setVpnState] = useState<PingState>({ status: "idle" });
   const [showVpnDetails, setShowVpnDetails] = useState(false);
   const [lastVpnResult, setLastVpnResult] = useState<VpnStatus | null>(null);
+  const [driverState, setDriverState] = useState<PingState>({ status: "idle" });
   const [avLoading, setAvLoading] = useState(false);
   const [avItems, setAvItems] = useState<
     { name: string; running: boolean; lastScan?: string | null }[]
@@ -867,6 +868,36 @@ function App() {
     }
   }
 
+  async function handleDriverCheck() {
+    setDriverState({ status: "loading" });
+    try {
+      const result = (await invoke("get_driver_status")) as {
+        outdated_count: number;
+        sample: { device: string; version: string; date: string }[];
+      };
+      if (result.outdated_count > 0) {
+        const lines = result.sample.map((d) => `${d.device || "Unknown"} • ${d.version || "?"} • ${d.date || "?"}`);
+        setDriverState({
+          status: "error",
+          message: `Found ${result.outdated_count} very old driver(s).`,
+          details: lines.join("\n"),
+        });
+      } else {
+        setDriverState({
+          status: "success",
+          message: "No obviously outdated drivers detected.",
+        });
+      }
+    } catch (err) {
+      console.error("Failed to check drivers:", err);
+      setDriverState({
+        status: "error",
+        message: "Could not check drivers. Please try again.",
+        details: err instanceof Error ? err.message : "Unknown error",
+      });
+    }
+  }
+
   const renderAppContextDetails = () => {
     if (!appContextDetails) {
       return <small>Not available.</small>;
@@ -1406,6 +1437,8 @@ function App() {
               onToggleVpnDetails={() => setShowVpnDetails((prev) => !prev)}
               antivirus={{ loading: avLoading, items: avItems }}
               onLaunchAntivirus={handleLaunchAntivirus}
+              driverState={driverState}
+              onDriverCheck={handleDriverCheck}
             />
           </main>
         ) : activeNav === "ai" ? (

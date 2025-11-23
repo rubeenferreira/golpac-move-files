@@ -120,6 +120,20 @@ struct VpnStatus {
     timestamp: String,
 }
 
+#[derive(Serialize, Default)]
+struct DriverEntry {
+    device: String,
+    version: String,
+    date: String,
+}
+
+#[derive(Serialize, Default)]
+struct DriverStatus {
+    outdated_count: usize,
+    sample: Vec<DriverEntry>,
+    raw: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct AvProduct {
     name: String,
@@ -282,6 +296,102 @@ fn launch_antivirus_impl(product: String) -> Result<(), String> {
 #[cfg(not(target_os = "windows"))]
 fn launch_antivirus_impl(_product: String) -> Result<(), String> {
     Err("Launching antivirus is only supported on Windows.".to_string())
+}
+
+#[tauri::command]
+fn get_driver_status() -> Result<DriverStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+          $cutoff = (Get-Date).AddYears(-3)
+          Get-WmiObject Win32_PnPSignedDriver |
+            Where-Object { $_.DriverDate -lt $cutoff } |
+            Select-Object DeviceName, DriverVersion, DriverDate |
+            ConvertTo-Json -Depth 2
+        "#;
+
+        let output = Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["-NoProfile", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
+
+        if !output.status.success() {
+            return Err("Could not check drivers".to_string());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let parsed: serde_json::Result<serde_json::Value> = serde_json::from_str(&stdout);
+
+        let mut entries: Vec<DriverEntry> = Vec::new();
+        if let Ok(val) = parsed {
+            match val {
+                serde_json::Value::Array(arr) => {
+                    for item in arr.iter().take(5) {
+                        let device = item
+                            .get("DeviceName")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown")
+                            .to_string();
+                        let version = item
+                            .get("DriverVersion")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let date = item
+                            .get("DriverDate")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        entries.push(DriverEntry {
+                            device,
+                            version,
+                            date,
+                        });
+                    }
+                }
+                serde_json::Value::Object(obj) => {
+                    let device = obj
+                        .get("DeviceName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let version = obj
+                        .get("DriverVersion")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let date = obj
+                        .get("DriverDate")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    entries.push(DriverEntry {
+                        device,
+                        version,
+                        date,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let count = parsed
+            .ok()
+            .and_then(|v| v.as_array().map(|a| a.len()))
+            .unwrap_or_else(|| if entries.is_empty() { 0 } else { 1 });
+
+        Ok(DriverStatus {
+            outdated_count: count,
+            sample: entries,
+            raw: Some(stdout),
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Driver check is only supported on Windows.".to_string())
+    }
 }
 
 //
@@ -1321,6 +1431,7 @@ fn main() {
             test_internet_connection,
             get_antivirus_status,
             launch_antivirus,
+            get_driver_status,
             exit_application
         ])
         .setup(|app| {

@@ -26,6 +26,8 @@ type TroubleshootPanelProps = {
     items: { name: string; running: boolean; lastScan?: string | null }[];
   };
   onLaunchAntivirus?: (name: string) => void;
+  driverState: PingPanelState;
+  onDriverCheck: () => void;
 };
 
 export function TroubleshootPanel({
@@ -39,9 +41,12 @@ export function TroubleshootPanel({
   onToggleVpnDetails,
   antivirus,
   onLaunchAntivirus,
+  driverState,
+  onDriverCheck,
 }: TroubleshootPanelProps) {
   const isPingLoading = pingState.status === "loading";
   const isVpnLoading = vpnState.status === "loading";
+  const isDriverLoading = driverState.status === "loading";
   return (
     <div className="troubleshoot-panel">
       <div className="troubleshoot-card">
@@ -114,6 +119,38 @@ export function TroubleshootPanel({
             )}
             {showVpnDetails && vpnState.details && (
               <pre className="ping-details">{vpnState.details}</pre>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="troubleshoot-card">
+        <h2>Drivers</h2>
+        <p>Quick scan for very old drivers.</p>
+        <div className="troubleshoot-buttons">
+          <button
+            type="button"
+            className="secondary-btn wide"
+            onClick={onDriverCheck}
+            disabled={isDriverLoading}
+          >
+            <span className="icon">🔧</span>
+            {isDriverLoading ? (
+              <>
+                Checking drivers…
+                <span className="inline-spinner" aria-hidden />
+              </>
+            ) : (
+              "Check outdated drivers"
+            )}
+          </button>
+        </div>
+
+        {driverState.status !== "idle" && (
+          <div className={`ping-result ${driverState.status}`}>
+            <p>{driverState.message}</p>
+            {driverState.details && (
+              <pre className="ping-details">{driverState.details}</pre>
             )}
           </div>
         )}
