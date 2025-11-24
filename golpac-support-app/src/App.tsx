@@ -214,7 +214,7 @@ function App() {
   >([]);
   const [aiQuestion, setAiQuestion] = useState("");
   const [aiHistory, setAiHistory] = useState<
-    { id: number; question: string; answer: string; actionLabel?: string; actionTarget?: "troubleshoot" }[]
+    { id: number; question: string; answer: string; actionLabel?: string; actionTarget?: "troubleshoot" | "ticket" }[]
   >([]);
   const [aiFlow, setAiFlow] = useState<ConversationState>({
     activeIntent: undefined,
@@ -974,7 +974,9 @@ function App() {
     }
     const baseId = Date.now();
     const action =
-      wantsNetworkCheck || wantsVpnCheck || wantsDriverCheck
+      response.actionLabel && response.actionTarget
+        ? { actionLabel: response.actionLabel, actionTarget: response.actionTarget }
+        : wantsNetworkCheck || wantsVpnCheck || wantsDriverCheck
         ? { actionLabel: "View details in Troubleshoot", actionTarget: "troubleshoot" as const }
         : undefined;
     setAiHistory((prev) =>
@@ -1318,6 +1320,8 @@ function App() {
       setDescription("");
       setScreenshots([]);
       setStatus("success");
+      setUrgency("Normal");
+      setCategory("General");
     } catch (err) {
       console.error("Failed to send ticket:", err);
 
@@ -1722,6 +1726,7 @@ function App() {
               history={aiHistory}
               analyzing={aiAnalyzing}
               onOpenTroubleshoot={() => handleNavClick("troubleshoot")}
+              onOpenTicket={() => handleNavClick("home")}
             />
           </main>
         ) : activeNav === "history" ? (

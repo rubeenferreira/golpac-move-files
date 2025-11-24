@@ -6,6 +6,8 @@ export type AiResponse = {
   followUpDelayMs?: number;
   followUpQuestion?: string;
   flow?: ConversationState;
+  actionLabel?: string;
+  actionTarget?: "troubleshoot" | "ticket";
 };
 
 type PrinterInfo = { name: string; ip?: string | null; status?: string | null };
@@ -69,6 +71,7 @@ export interface ConversationState {
   activeIntent?: Intent;
   stepIndex: number;
   sage?: SageSlots;
+  slots?: Record<string, string>;
 }
 type HistoryEntry = { question: string; answer: string };
 
@@ -109,7 +112,8 @@ export type DeviceStatus = {
   };
 };
 
-type IntentConfig = { intent: Intent; patterns: string[] };
+type IntentConfig = { intent: Intent; patterns: string[]; minScore?: number };
+type FlowStepConfig = { ask1: string; ask2: string; summaryIntent: Intent };
 
 const INTENT_CONFIG: IntentConfig[] = [
   {
@@ -128,14 +132,17 @@ const INTENT_CONFIG: IntentConfig[] = [
       "pritner",
       "priter",
     ],
+    minScore: 2,
   },
   {
     intent: "SAGE300",
     patterns: ["sage", "sage 300", "sage300", "accpac", "sge 300", "sgae 300", "sage error", "sage300 error"],
+    minScore: 2,
   },
   {
     intent: "OUTLOOK_EMAIL",
     patterns: ["outlook", "email", "e-mail", "mailbox", "o365 mail", "office 365", "outlok", "otulook", "emial", "mail app"],
+    minScore: 2,
   },
   {
     intent: "SHARED_DRIVE",
@@ -151,22 +158,27 @@ const INTENT_CONFIG: IntentConfig[] = [
       "\\\\",
       "folder share",
     ],
+    minScore: 2,
   },
   {
     intent: "VPN",
     patterns: ["vpn", "checkpoint", "harmony", "connect to server", "cannot vpn", "vnp", "vpv"],
+    minScore: 2,
   },
   {
     intent: "NETWORK_INTERNET",
     patterns: ["internet", "network", "wifi", "wi-fi", "ethernet", "offline", "no internet", "slow internet", "connection"],
+    minScore: 2,
   },
   {
     intent: "OFFICE365",
     patterns: ["office365", "office 365", "o365", "ofice 365", "login 365", "microsoft 365"],
+    minScore: 2,
   },
   {
     intent: "GENERAL_IT",
     patterns: ["computer", "pc", "windows", "slow", "freeze", "crash", "problem", "issue", "error"],
+    minScore: 1,
   },
 ];
 
@@ -185,6 +197,58 @@ const NETWORK_QUESTION_PATTERNS = [
   "offline",
 ];
 const IP_QUESTION_PATTERNS = ["public ip", "ip address", "gateway", "default gateway", "what is my ip"];
+const FLOW_CONFIG: Record<Intent, FlowStepConfig> = {
+  PRINTERS: {
+    ask1: "You're having a printing issue. Two quick things:\n1) Which printer are you trying to use?\n2) Has it worked before today?",
+    ask2: "Got it. Any error message or is it stuck in queue? I'm preparing this for IT.",
+    summaryIntent: "PRINTERS",
+  },
+  OUTLOOK_EMAIL: {
+    ask1: "You're reporting an Outlook/email issue. I need two things:\n1) What error text do you see?\n2) Does email work for anyone else near you?",
+    ask2: "Thanks. Any other detail about sending vs receiving? I'm preparing this for IT.",
+    summaryIntent: "OUTLOOK_EMAIL",
+  },
+  SAGE300: {
+    ask1: "You're having a Sage 300 issue. Which module are you using (for example: General Ledger, Accounts Payable, Accounts Receivable, Project, Job Costing, Order Entry)?",
+    ask2: "What exact error text or code do you see? I'm preparing this for IT.",
+    summaryIntent: "SAGE300",
+  },
+  VPN: {
+    ask1: "VPN issue noted. Which VPN are you using, and what happens when you try to connect?",
+    ask2: "Does it show any error code or just time out? I'm preparing this for IT.",
+    summaryIntent: "VPN",
+  },
+  SHARED_DRIVE: {
+    ask1: "Shared drive issue. Which drive letter or folder are you trying to access?",
+    ask2: "Can anyone else access it, or is it just you? I'm preparing this for IT.",
+    summaryIntent: "SHARED_DRIVE",
+  },
+  NETWORK_INTERNET: {
+    ask1: "Network/Internet issue. What's the main symptom (offline, slow, intermittent)?",
+    ask2: "Is this affecting all sites/apps or just one? I'm preparing this for IT.",
+    summaryIntent: "NETWORK_INTERNET",
+  },
+  OFFICE365: {
+    ask1: "Office 365 issue noted. Which app or area is impacted (mail, Teams, SharePoint)?",
+    ask2: "Do you see any error text or code? I'm preparing this for IT.",
+    summaryIntent: "OFFICE365",
+  },
+  GENERAL_IT: {
+    ask1: "I can capture this for IT. What's the main issue and when did it start?",
+    ask2: "Any error text or recent changes you noticed? I'm preparing this for IT.",
+    summaryIntent: "GENERAL_IT",
+  },
+  NONE: {
+    ask1: "",
+    ask2: "",
+    summaryIntent: "GENERAL_IT",
+  },
+  UNKNOWN: {
+    ask1: "",
+    ask2: "",
+    summaryIntent: "GENERAL_IT",
+  },
+};
 
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
@@ -278,7 +342,39 @@ function detectIntent(text: string): { intent: Intent; score: number } {
       best = { intent: cfg.intent, score: s };
     }
   }
+  const cfg = INTENT_CONFIG.find((c) => c.intent === best.intent);
+  const minScore = cfg?.minScore ?? 2;
+  if (best.score < minScore) {
+    return { intent: "UNKNOWN", score: 0 };
+  }
   return best;
+}
+
+// Lightweight self-test helper (not run automatically)
+export function runAiLogicSelfTest() {
+  const tests: string[] = [];
+  const t = (name: string, pass: boolean) => tests.push(`${pass ? "✅" : "❌"} ${name}`);
+
+  const intentPrinter = detectIntent("my printer is broken");
+  t("detectIntent printers", intentPrinter.intent === "PRINTERS");
+
+  const intentUnknown = detectIntent("hello world");
+  t("detectIntent unknown", intentUnknown.intent === "UNKNOWN");
+
+  const diag = buildDiagnosticsResponse(
+    {
+      network: { internetStatus: "online", vpnStatus: "connected", defaultGateway: "1.1.1.1", publicIp: "8.8.8.8" },
+      system: { name: "pc", ipv4: "192.168.1.2", domain: null, ram: "8 GB", cpu: "CPU" },
+      health: { uptime: "1h", cpuUsage: 10, lastCaptured: "" },
+      drivers: { outdatedCount: 0 },
+      antivirus: { status: "ok", vendor: "Webroot" },
+      storage: { drives: [] },
+    },
+    { activeIntent: "NONE", stepIndex: 0 }
+  );
+  t("buildDiagnosticsResponse contains Internet", diag.answer.includes("Internet"));
+
+  return tests;
 }
 
 function matchesPatterns(text: string, patterns: string[]): boolean {
@@ -454,6 +550,7 @@ function handleSageInProgress(message: string, state: ConversationState): AiResp
     activeIntent: "SAGE300",
     stepIndex: state.stepIndex,
     sage: { ...(state.sage || {}) },
+    slots: { ...(state.slots || {}) },
   };
   const text = message.trim();
 
@@ -481,13 +578,6 @@ function handleSageInProgress(message: string, state: ConversationState): AiResp
   };
 }
 
-function stepIndexForStep(step: FlowStep): number {
-  if (step === "ask_details") return 1;
-  if (step === "ask_error") return 2;
-  if (step === "summarize") return 0;
-  return 0;
-}
-
 function stepForIndex(idx: number): FlowStep {
   if (idx <= 0) return "ask_details";
   if (idx === 1) return "ask_error";
@@ -495,148 +585,48 @@ function stepForIndex(idx: number): FlowStep {
   return "done";
 }
 
-function getStepResponse(intent: Intent, step: FlowStep, recent: string[], _history: HistoryEntry[]): AiResponse {
-  const lastUser = recent.length > 0 ? recent[recent.length - 1] : "";
-  const prevUser = recent.length > 1 ? recent[recent.length - 2] : "";
+function getStepResponse(intent: Intent, step: FlowStep, slots: Record<string, string>, userAnswer: string | null): AiResponse {
+  const flowCfg = FLOW_CONFIG[intent] || FLOW_CONFIG.GENERAL_IT;
+  const nextSlots = { ...slots };
 
-  const advance = (answer: string, next: FlowStep): AiResponse => ({
-    answer,
-    flow: { activeIntent: intent, stepIndex: stepIndexForStep(next) },
-  });
-
-  if (intent === "OUTLOOK_EMAIL" || intent === "OFFICE365") {
-    if (step === "ask_details") {
-      return advance(
-        "You're reporting an Outlook/email issue. I need two things:\n1) What error text do you see?\n2) Does email work for anyone else near you?",
-        "ask_error"
-      );
-    }
-    if (step === "ask_error") {
-      return advance(
-        "Thanks. Any other detail about sending vs receiving? I'm preparing this for IT.",
-        "summarize"
-      );
-    }
-    if (step === "summarize") {
-      return {
-        answer: "Preparing the Outlook/email notes for IT…",
-        followUp: summarizeForIntent("OUTLOOK_EMAIL", prevUser || lastUser, lastUser),
-        followUpDelayMs: 1200,
-        flow: { activeIntent: undefined, stepIndex: 0 },
-      };
-    }
-  }
-
-  if (intent === "PRINTERS") {
-    if (step === "ask_details") {
-      return advance(
-        "You're having a printing issue. Two quick things:\n1) Which printer are you trying to use?\n2) Has it worked before today?",
-        "ask_error"
-      );
-    }
-    if (step === "ask_error") {
-      return advance("Got it. Any error message or is it stuck in queue? I'm preparing this for IT.", "summarize");
-    }
-    if (step === "summarize") {
-      return {
-        answer: "Preparing the printer details for IT…",
-        followUp: summarizeForIntent("PRINTERS", prevUser || lastUser, lastUser),
-        followUpDelayMs: 1200,
-        flow: { activeIntent: undefined, stepIndex: 0 },
-      };
-    }
-  }
-
-  if (intent === "SAGE300") {
-    if (step === "ask_details") {
-      return advance(
-        "You're having a Sage 300 issue. Which module are you using (for example: General Ledger, Accounts Payable, Accounts Receivable, Project, Job Costing, Order Entry)?",
-        "ask_error"
-      );
-    }
-    if (step === "ask_error") {
-      return advance("What exact error text or code do you see? I'm preparing this for IT.", "summarize");
-    }
-    if (step === "summarize") {
-      return {
-        answer: "Preparing the Sage 300 details for IT…",
-        followUp: summarizeForIntent("SAGE300", prevUser || lastUser, lastUser),
-        followUpDelayMs: 1200,
-        flow: { activeIntent: undefined, stepIndex: 0 },
-      };
-    }
-  }
-
-  if (intent === "VPN") {
-    if (step === "ask_details") {
-      return advance(
-        "VPN issue noted. Which VPN are you using, and what happens when you try to connect?",
-        "ask_error"
-      );
-    }
-    if (step === "ask_error") {
-      return advance("Does it show any error code or just time out? I'm preparing this for IT.", "summarize");
-    }
-    if (step === "summarize") {
-      return {
-        answer: "Preparing the VPN details for IT…",
-        followUp: summarizeForIntent("VPN", prevUser || lastUser, lastUser),
-        followUpDelayMs: 1200,
-        flow: { activeIntent: undefined, stepIndex: 0 },
-      };
-    }
-  }
-
-  if (intent === "SHARED_DRIVE") {
-    if (step === "ask_details") {
-      return advance(
-        "Shared drive issue. Which drive letter or folder are you trying to access?",
-        "ask_error"
-      );
-    }
-    if (step === "ask_error") {
-      return advance("Can anyone else access it, or is it just you? I'm preparing this for IT.", "summarize");
-    }
-    if (step === "summarize") {
-      return {
-        answer: "Preparing the shared drive details for IT…",
-        followUp: summarizeForIntent("SHARED_DRIVE", prevUser || lastUser, lastUser),
-        followUpDelayMs: 1200,
-        flow: { activeIntent: undefined, stepIndex: 0 },
-      };
-    }
-  }
-
-  // Generic fallback intent
   if (step === "ask_details") {
-    return advance(
-      "I can capture this for IT. What's the main issue and when did it start?",
-      "ask_error"
-    );
+    return {
+      answer: flowCfg.ask1,
+      flow: { activeIntent: intent, stepIndex: 1, slots: nextSlots },
+    };
   }
+
   if (step === "ask_error") {
-    return advance("Any error text or recent changes you noticed? I'm preparing this for IT.", "summarize");
+    if (userAnswer) nextSlots["first"] = userAnswer;
+    return {
+      answer: flowCfg.ask2,
+      flow: { activeIntent: intent, stepIndex: 2, slots: nextSlots },
+    };
   }
+
   if (step === "summarize") {
+    if (userAnswer && !nextSlots["second"]) nextSlots["second"] = userAnswer;
     return {
       answer: "Preparing the details for IT…",
-      followUp: summarizeForIntent("GENERAL_IT", prevUser || lastUser, lastUser),
+      followUp: summarizeForIntent(flowCfg.summaryIntent, nextSlots["first"] || null, nextSlots["second"] || null),
       followUpDelayMs: 1200,
-      flow: { activeIntent: undefined, stepIndex: 0 },
+      flow: { activeIntent: undefined, stepIndex: 0, slots: {} },
+      actionLabel: "Open ticket form",
+      actionTarget: "ticket",
     };
   }
 
   return {
     answer: "This requires deeper investigation by Golpac IT. Please open a ticket.",
-    flow: { activeIntent: intent, stepIndex: 0 },
+    flow: { activeIntent: intent, stepIndex: 0, slots: nextSlots },
   };
 }
 
 export function buildAiAnswer(
   question: string,
-  recent: string[] = [],
+  _recent: string[] = [],
   ctx: AiContext,
-  history: HistoryEntry[] = [],
+  _history: HistoryEntry[] = [],
   conversationState: ConversationState = { stepIndex: 0 },
   deviceStatus?: DeviceStatus | null
 ): AiResponse {
@@ -694,11 +684,7 @@ export function buildAiAnswer(
     }
     if (currentStepIndex > 0) {
       const step = stepForIndex(currentStepIndex);
-      const res = getStepResponse(activeFlow, step, recent, history);
-      if (res.flow) {
-        res.flow.sage = state.sage;
-      }
-      return res;
+      return getStepResponse(activeFlow, step, state.slots || {}, trimmedQuestion);
     }
   }
 
@@ -711,8 +697,7 @@ export function buildAiAnswer(
     if (nextIntent === "SAGE300") {
       return startSageFlow();
     }
-    const startRes = getStepResponse(nextIntent, "ask_details", recent, history);
-    return startRes;
+    return getStepResponse(nextIntent, "ask_details", {}, null);
   }
 
   // If already done or nothing matched, provide handoff.

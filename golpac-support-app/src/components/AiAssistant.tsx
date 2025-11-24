@@ -5,7 +5,7 @@ type Message = {
   question: string;
   answer: string;
   actionLabel?: string;
-  actionTarget?: "troubleshoot";
+  actionTarget?: "troubleshoot" | "ticket";
 };
 
 type AiAssistantProps = {
@@ -16,6 +16,7 @@ type AiAssistantProps = {
   history: Message[];
   analyzing?: boolean;
   onOpenTroubleshoot?: () => void;
+  onOpenTicket?: () => void;
 };
 
 export function AiAssistant({
@@ -26,6 +27,7 @@ export function AiAssistant({
   history,
   analyzing = false,
   onOpenTroubleshoot,
+  onOpenTicket,
 }: AiAssistantProps) {
   const disabled = !question.trim();
 
@@ -61,6 +63,17 @@ export function AiAssistant({
                           type="button"
                           className="secondary-btn"
                           onClick={onOpenTroubleshoot}
+                        >
+                          {msg.actionLabel}
+                        </button>
+                      </div>
+                    )}
+                    {msg.actionLabel && msg.actionTarget === "ticket" && onOpenTicket && (
+                      <div style={{ marginTop: 8 }}>
+                        <button
+                          type="button"
+                          className="primary-btn"
+                          onClick={onOpenTicket}
                         >
                           {msg.actionLabel}
                         </button>
