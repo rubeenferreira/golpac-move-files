@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { buildAiAnswer } from "./ai/aiLogic";
+import { buildAiAnswer, DeviceStatus, ConversationState } from "./ai/aiLogic";
 import golpacLogo from "./assets/golpac-logo.png";
 import { SystemPanel } from "./components/SystemPanel";
 import { TroubleshootPanel } from "./components/TroubleshootPanel";
@@ -191,6 +191,11 @@ function App() {
   const [aiHistory, setAiHistory] = useState<
     { id: number; question: string; answer: string }[]
   >([]);
+  const [aiFlow, setAiFlow] = useState<ConversationState>({
+    activeIntent: undefined,
+    stepIndex: 0,
+    sage: undefined,
+  });
   const [aiTimer, setAiTimer] = useState<number | null>(null);
   const [aiFollowUpTimer, setAiFollowUpTimer] = useState<number | null>(null);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
@@ -744,23 +749,113 @@ function App() {
     }
   }
 
+  function buildDeviceStatus(): DeviceStatus {
+    const metrics = systemMetrics;
+    const internetStatus: "online" | "offline" | "degraded" | "unknown" = isOffline
+      ? "offline"
+      : (() => {
+          if (pingState.result?.success) {
+            const loss = pingState.result.packet_loss ?? 0;
+            if (loss > 20) return "degraded";
+            return "online";
+          }
+          if (pingState.status === "error") return "unknown";
+          return "unknown";
+        })();
+
+    const vpnStatus: "connected" | "disconnected" | "unknown" = lastVpnResult
+      ? lastVpnResult.active
+        ? "connected"
+        : "disconnected"
+      : "unknown";
+
+    const memUsed = metrics?.memory_used_gb ?? null;
+    const memTotal = metrics?.memory_total_gb ?? null;
+    const ram =
+      memUsed != null && memTotal != null
+        ? `${Math.round(memUsed)} GB / ${Math.round(memTotal)} GB`
+        : null;
+
+    const drives =
+      metrics?.disks?.map((d) => {
+        const total = d.total_gb || 0;
+        const free = d.free_gb || 0;
+        const usedPercent =
+          total > 0 ? Math.min(100, Math.max(0, ((total - free) / total) * 100)) : null;
+        return {
+          name: d.name || null,
+          mount: d.mount || null,
+          usedPercent,
+          freeGb: d.free_gb ?? null,
+          totalGb: d.total_gb ?? null,
+        };
+      }) ?? [];
+
+    const avStatus: NonNullable<DeviceStatus["antivirus"]>["status"] =
+      avItems.length === 0 ? "none" : avItems.every((a) => a.running) ? "ok" : "warning";
+    const avVendor = avItems[0]?.name || null;
+
+    return {
+      network: {
+        internetStatus,
+        vpnStatus,
+        defaultGateway: metrics?.default_gateway ?? null,
+        publicIp: metrics?.public_ip ?? null,
+      },
+      system: {
+        name: systemOverview?.hostname || null,
+        ipv4: systemOverview?.ipv4 || null,
+        domain: systemOverview?.domain || null,
+        ram,
+        cpu: metrics?.cpu_brand || null,
+      },
+      health: {
+        uptime: metrics?.uptime_human ?? null,
+        cpuUsage: metrics?.cpu_usage_percent ?? null,
+        lastCaptured: metrics?.timestamp ?? null,
+      },
+      drivers: {
+        outdatedCount: null,
+      },
+      antivirus: {
+        status: avStatus,
+        vendor: avVendor,
+      },
+      storage: {
+        drives,
+      },
+    };
+  }
+
 
   function handleAskAi() {
     const question = aiQuestion.trim();
     if (!question) return;
     const recent = aiHistory.slice(-3).map((m) => m.question);
-    const response = buildAiAnswer(question, recent, {
-      isOffline,
-      pingState,
-      printers,
-      lastVpnResult,
-      avItems,
-      systemMetrics,
-    });
+    const deviceStatus = buildDeviceStatus();
+    const response = buildAiAnswer(
+      question,
+      recent,
+      {
+        isOffline,
+        pingState,
+        printers,
+        lastVpnResult,
+        avItems,
+        systemMetrics,
+      },
+      aiHistory,
+      aiFlow,
+      deviceStatus
+    );
     const baseId = Date.now();
     setAiHistory((prev) =>
       [...prev, { id: baseId, question, answer: response.answer }].slice(-50)
     );
+
+    if (response.flow) {
+      setAiFlow(response.flow);
+    }
 
     if (aiFollowUpTimer) {
       window.clearTimeout(aiFollowUpTimer);
@@ -770,9 +865,7 @@ function App() {
 
     if (response.followUp) {
       setAiAnalyzing(true);
-      const delay =
-        response.followUpDelayMs ??
-        (10000 + Math.floor(Math.random() * 5000)); // 10–15 seconds
+      const delay = response.followUpDelayMs ?? 2000;
 
       const timerId = window.setTimeout(() => {
         setAiAnalyzing(false);
@@ -793,6 +886,7 @@ function App() {
     }
     const timerId = window.setTimeout(() => {
       setAiHistory([]);
+      setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined });
     }, 10 * 60 * 1000);
     setAiTimer(timerId);
   }
@@ -808,6 +902,8 @@ function App() {
     }
     setAiAnalyzing(false);
     setAiHistory([]);
+    setAiQuestion("");
+    setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined });
   }
 
   async function handlePingTest() {

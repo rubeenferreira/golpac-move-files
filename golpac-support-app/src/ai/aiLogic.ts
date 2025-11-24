@@ -5,6 +5,7 @@ export type AiResponse = {
   followUp?: string;
   followUpDelayMs?: number;
   followUpQuestion?: string;
+  flow?: ConversationState;
 };
 
 type PrinterInfo = { name: string; ip?: string | null; status?: string | null };
@@ -18,25 +19,6 @@ type SystemMetrics = {
   disks?: { name: string; free_gb: number }[];
 };
 
-const SAGE_ISSUE_OPTIONS = [
-  { value: "general", label: "General Issues" },
-  { value: "gl", label: "General Ledger" },
-  { value: "ap", label: "Accounts Payable" },
-  { value: "ar", label: "Accounts Receivable" },
-  { value: "project", label: "Project" },
-  { value: "job", label: "Job Costing" },
-  { value: "order", label: "Order Entry" },
-];
-const SAGE_MODULE_TOKENS: Record<string, string[]> = {
-  "General Issues": ["general", "general issues", "performance", "slow", "freeze", "crash"],
-  "General Ledger": ["gl", "general ledger", "ledger"],
-  "Accounts Payable": ["ap", "accounts payable", "payable"],
-  "Accounts Receivable": ["ar", "accounts receivable", "receivable"],
-  Project: ["project"],
-  "Job Costing": ["job costing", "job"],
-  "Order Entry": ["order entry", "order"],
-};
-
 type AiContext = {
   isOffline: boolean;
   pingState: PingPanelState;
@@ -46,298 +28,567 @@ type AiContext = {
   systemMetrics: SystemMetrics | null;
 };
 
-export function buildAiAnswer(question: string, recent: string[] = [], ctx: AiContext): AiResponse {
-  const { isOffline, pingState, printers, lastVpnResult, avItems, systemMetrics } = ctx;
-  const q = question.trim().toLowerCase();
-  const recentTexts = recent.map((r) => r.toLowerCase());
-  const corpus = [q, ...recentTexts].join(" ");
-  const normalizeTight = (s: string) => s.replace(/[^a-z0-9]/g, "");
-  const corpusTight = normalizeTight(corpus);
-  const qTight = normalizeTight(q);
-  const perfWords = ["slow", "lag", "laggy", "freeze", "freezing", "hung", "hanging", "stuck", "sluggish", "taking ages", "takes ages"];
+export type IntentId =
+  | "printers"
+  | "sage300"
+  | "outlook_email"
+  | "shared_drive"
+  | "vpn"
+  | "network_internet"
+  | "office365"
+  | "general_it";
 
-  const includesAny = (parts: string[], haystack: string = corpus, haystackTight: string = corpusTight) =>
-    parts.some((pRaw) => {
-      const p = pRaw.toLowerCase();
-      const pTight = normalizeTight(p);
-      return haystack.includes(p) || haystackTight.includes(pTight);
-    });
-  const currentIncludesAny = (parts: string[]) => includesAny(parts, q, qTight);
-  const wrap = (answer: string): AiResponse => ({ answer });
+export type Intent =
+  | "PRINTERS"
+  | "SAGE300"
+  | "OUTLOOK_EMAIL"
+  | "SHARED_DRIVE"
+  | "VPN"
+  | "NETWORK_INTERNET"
+  | "OFFICE365"
+  | "GENERAL_IT"
+  | "NONE"
+  | "UNKNOWN";
 
-  const findSageModuleFromText = (text: string): { value: string; label: string } | null => {
-    const lower = text.toLowerCase();
-    for (const opt of SAGE_ISSUE_OPTIONS) {
-      const tokens = SAGE_MODULE_TOKENS[opt.label] || [];
-      if (tokens.some((tok) => lower.includes(tok))) return opt;
-      if (lower.includes(opt.label.toLowerCase())) return opt;
-    }
-    return null;
+export type FlowStep = "ask_details" | "ask_error" | "summarize" | "done";
+
+export type SageSlots = {
+  module?: string;
+  errorText?: string;
+};
+
+export interface ConversationState {
+  activeIntent?: Intent;
+  stepIndex: number;
+  sage?: SageSlots;
+}
+type HistoryEntry = { question: string; answer: string };
+
+export type DeviceStatus = {
+  network?: {
+    internetStatus?: "online" | "offline" | "degraded" | "unknown";
+    vpnStatus?: "connected" | "disconnected" | "unknown";
+    defaultGateway?: string | null;
+    publicIp?: string | null;
   };
-
-  const findSageModule = () =>
-    findSageModuleFromText(question) ||
-    findSageModuleFromText(corpus) ||
-    recentTexts.map(findSageModuleFromText).find(Boolean);
-  const isErrorMention = includesAny(["error", "code", "failure", "not working", "issue"]);
-  const pickFollowUp = (what: string) =>
-    Math.random() < 0.2
-      ? `Still analyzing… everything looks OK on this system. If you still see the ${what}, please submit a ticket to IT.`
-      : `Still analyzing… I couldn't auto-resolve the ${what}. Please submit a ticket to IT so they can help.`;
-
-  const topicTokens = {
-    sage: ["sage", "sgae", "accpac", "sage300", "sage 300", "sge", "sag"],
-    printer: ["printer", "printers", "prnter", "print", "priner", "printere"],
-    adobe: ["adobe", "adob", "acrobat", "reader", "acrobt", "pdf"],
-    outlook: ["outlook", "outlok", "email", "mail", "office", "o365", "365"],
-    vpn: ["vpn", "vnp", "vpv"],
-    antivirus: ["antivirus", "antivrus", "webroot", "webrrot", "checkpoint", "check point", "malwarebytes", "malware bytes", "malwarebyte"],
-    network: ["network", "internet", "online", "offline", "connected", "connection", "wifi", "ethernet", "lan"],
-    system: ["system", "pc status", "computer status", "basic system health", "system health", "machine status", "health check", "device status"],
+  system?: {
+    name?: string | null;
+    ipv4?: string | null;
+    domain?: string | null;
+    ram?: string | null;
+    cpu?: string | null;
   };
-
-  const topicFromText = (text: string): string | null => {
-    const tLower = text.toLowerCase();
-    const tTight = normalizeTight(tLower);
-    const hasTokens = (arr: string[]) =>
-      arr.some((tok) => {
-        const tokLower = tok.toLowerCase();
-        const tokTight = normalizeTight(tokLower);
-        return tLower.includes(tokLower) || tTight.includes(tokTight);
-      });
-
-    if (hasTokens(topicTokens.sage)) return "sage";
-    if (hasTokens(topicTokens.printer)) return "printer";
-    if (hasTokens(topicTokens.adobe)) return "adobe";
-    if (hasTokens(topicTokens.outlook)) return "outlook";
-    if (hasTokens(topicTokens.vpn)) return "vpn";
-    if (hasTokens(topicTokens.antivirus)) return "antivirus";
-    if (hasTokens(topicTokens.network)) return "network";
-    if (hasTokens(topicTokens.system)) return "system";
-    return null;
+  health?: {
+    uptime?: string | null;
+    cpuUsage?: number | null;
+    lastCaptured?: string | null;
   };
+  drivers?: {
+    outdatedCount?: number | null;
+  };
+  antivirus?: {
+    status?: "none" | "ok" | "warning" | "expired";
+    vendor?: string | null;
+  };
+  storage?: {
+    drives?: {
+      name?: string | null;
+      mount?: string | null;
+      usedPercent?: number | null;
+      freeGb?: number | null;
+      totalGb?: number | null;
+    }[];
+  };
+};
 
-  const hasSageModuleHint = !!findSageModuleFromText(corpus);
-  const topic =
-    topicFromText(question) ||
-    topicFromText(corpus) ||
-    (hasSageModuleHint ? "sage" : null);
-  const topicMentions = (name: string) => [question, ...recent].filter((t) => topicFromText(t) === name).length;
-  const hasIssueWords = (text: string) =>
-    [
-      "error",
-      "code",
-      "fail",
-      "issue",
-      "won't",
-      "cannot",
-      "can't",
-      "not working",
-      "freeze",
-      "freezing",
-      "crash",
-      "crashing",
-      "hang",
-      "stuck",
-      "slow",
-    ].some((w) => text.toLowerCase().includes(w));
-  const recentIssueMention = hasIssueWords(question) || recent.some(hasIssueWords);
+type IntentConfig = { intent: Intent; patterns: string[] };
 
-  // Greetings
-  const greetingWords = ["hello", "hi", "hey"];
-  const topicalWords = ["printer", "sage", "vpn", "outlook", "email", "adobe", "pdf", "network", "internet", "error"];
-  if (currentIncludesAny(greetingWords) && !includesAny(topicalWords)) {
-    if (isOffline) return wrap("Hi! I can spot the device is offline. Want me to help you confirm connectivity or VPN?");
-    if (pingState.status === "success" && pingState.result) {
-      const r = pingState.result;
-      const avg = r.average_ms ? `${Math.round(r.average_ms)} ms` : "n/a";
-      return wrap(`Hi! You're online (ping ${r.target}, avg ${avg}). Tell me what’s up with printers, Sage, Outlook/email, VPN, or Adobe and I’ll help.`);
+const INTENT_CONFIG: IntentConfig[] = [
+  {
+    intent: "PRINTERS",
+    patterns: [
+      "printer",
+      "printing",
+      "print",
+      "hp",
+      "brother",
+      "canon",
+      "epson",
+      "queue",
+      "toner",
+      "prnter",
+      "pritner",
+      "priter",
+    ],
+  },
+  {
+    intent: "SAGE300",
+    patterns: ["sage", "sage 300", "sage300", "accpac", "sge 300", "sgae 300", "sage error", "sage300 error"],
+  },
+  {
+    intent: "OUTLOOK_EMAIL",
+    patterns: ["outlook", "email", "e-mail", "mailbox", "o365 mail", "office 365", "outlok", "otulook", "emial", "mail app"],
+  },
+  {
+    intent: "SHARED_DRIVE",
+    patterns: [
+      "shared drive",
+      "network drive",
+      "map drive",
+      "mapped drive",
+      "x:",
+      "z:",
+      "no drive",
+      "cant see drive",
+      "\\\\",
+      "folder share",
+    ],
+  },
+  {
+    intent: "VPN",
+    patterns: ["vpn", "checkpoint", "harmony", "connect to server", "cannot vpn", "vnp", "vpv"],
+  },
+  {
+    intent: "NETWORK_INTERNET",
+    patterns: ["internet", "network", "wifi", "wi-fi", "ethernet", "offline", "no internet", "slow internet", "connection"],
+  },
+  {
+    intent: "OFFICE365",
+    patterns: ["office365", "office 365", "o365", "ofice 365", "login 365", "microsoft 365"],
+  },
+  {
+    intent: "GENERAL_IT",
+    patterns: ["computer", "pc", "windows", "slow", "freeze", "crash", "problem", "issue", "error"],
+  },
+];
+
+const SWITCH_HINTS = ["new issue", "another issue", "different problem", "other problem", "new problem", "another thing", "new ticket"];
+
+function normalizeText(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
     }
-    return wrap("Hi! How can I help? Mention printers, Sage, Outlook/email, VPN, or Adobe and I'll guide you.");
   }
+  return dp[m][n];
+}
 
-  // Network
-  if (topic === "network") {
-    if (isOffline) return wrap("The device appears offline. Run Troubleshoot → Test internet connection and check Wi‑Fi/cable. If it stays offline, call 888-585-0271.");
-    if (pingState.status === "success" && pingState.result) {
-      const r = pingState.result;
-      const avg = r.average_ms ? `${Math.round(r.average_ms)} ms` : "n/a";
-      return wrap(`Network looks good. Ping to ${r.target} succeeded (${r.responses}/${r.attempts}, avg ${avg}). If an app still fails, try VPN if required or re-run the test.`);
+function matchScore(text: string, patterns: string[]): number {
+  const norm = normalizeText(text);
+  const words = norm.split(" ").filter(Boolean);
+  let score = 0;
+  for (const raw of patterns) {
+    const p = normalizeText(raw);
+    if (!p) continue;
+    if (norm.includes(p)) {
+      score += 3;
+      continue;
     }
-    if (typeof navigator !== "undefined" && navigator.onLine) return wrap("I see you're online, but I don’t have a recent test. Run Troubleshoot → Test internet connection for details.");
-    return wrap("Network status is unclear. Run the internet test in Troubleshoot so I can quote the results.");
-  }
-
-  // Sage
-  if (topic === "sage") {
-    const moduleHit = findSageModule();
-    const quoted = question.match(/["“](.+?)["”]/);
-    const codeMatch = q.match(/error[:\s#-]*([A-Za-z0-9._-]+)/i);
-    if (quoted && quoted[1]) {
-      return {
-        answer: `I captured the Sage 300 error: “${quoted[1]}”${moduleHit ? ` in ${moduleHit.label}` : ""}. Quick try: close Sage, count to five, reopen, and retry. If it keeps failing, I’ll send the error to IT.`,
-        followUp: "Still analyzing… I couldn’t auto-fix this. Please submit a ticket with the module and that error so IT can dig in.",
-      };
-    }
-    if (moduleHit && codeMatch && codeMatch[1]) {
-      const code = codeMatch[1];
-      return {
-        answer: `Sage 300 ${moduleHit.label} error ${code} captured. Analyzing and trying to solve. If it persists, submit a ticket with this code so IT can dig in.`,
-        followUp: pickFollowUp(`Sage 300 ${moduleHit.label} error ${code}`),
-      };
-    }
-    if (moduleHit && isErrorMention) {
-      return {
-        answer: `Got it—Sage 300 is having trouble in ${moduleHit.label}. Paste the exact error or code so I can capture it for IT. If it’s blocking work, call 888-585-0271.`,
-        followUp: "Still analyzing… no quick fix found. Submit a ticket with the module and error so IT can handle it.",
-      };
-    }
-    if (moduleHit && recentIssueMention) {
-      return {
-        answer: `Captured a Sage 300 issue in ${moduleHit.label}. If you have the exact error text or code, paste it and I’ll log it for IT. Quick try: close Sage, wait 10 seconds, reopen, and retry.`,
-        followUp: pickFollowUp(`Sage 300 ${moduleHit.label} issue`),
-      };
-    }
-    const moduleList = SAGE_ISSUE_OPTIONS.map((m) => m.label).join(", ");
-    return wrap(`Tell me which Sage 300 module you’re in (${moduleList}). Then share the exact error text so I can capture it for IT.`);
-  }
-
-  // Outlook / Email
-  if (topic === "outlook") {
-    const seen = topicMentions("outlook");
-    const alreadyDetailed = recentIssueMention;
-    if (seen < 2 && !alreadyDetailed) return wrap("Noted Outlook/email. I see this device is online. What exactly is happening (send/receive, auth prompt, stuck emails)?");
-    return {
-      answer: "Understood—email/Outlook issue. Paste the exact error or describe the behavior (send/receive, auth prompt, stuck in Outbox). If VPN is required, make sure it’s on.",
-      followUp: pickFollowUp("email/Outlook issue"),
-    };
-  }
-
-  // Adobe / PDF
-  if (topic === "adobe") {
-    const seen = topicMentions("adobe");
-    const adobeHasIssue = recentIssueMention || includesAny(["won't open", "cannot open", "crash", "freeze", "freezing", "license", "slow", "stuck"], corpus);
-    const adobeProduct = includesAny(["reader"], corpus) ? "Adobe Reader" : includesAny(["acrobat"], corpus) ? "Adobe Acrobat" : null;
-    if (q.includes("running")) return wrap("I can’t confirm if Adobe is currently running from here. If it opens, great—if it crashes or won’t open, tell me the exact message so I can pass it to IT.");
-    if (includesAny(["license", "licensing", "subscription", "serial"])) {
-      return {
-        answer: "Sounds like an Adobe licensing/activation issue. Are you signed in with the right Adobe account? Paste the exact licensing or activation error and I’ll pass it to IT if needed.",
-        followUp: pickFollowUp("Adobe licensing issue"),
-      };
-    }
-    if (includesAny(["pdf", "open", "won't open", "cannot open"], q)) {
-      return {
-        answer: "Got it—PDF won’t open. Does Adobe Acrobat/Reader launch? Share the exact error and whether other PDFs open fine.",
-        followUp: pickFollowUp("PDF opening issue"),
-      };
-    }
-    if (adobeProduct && !adobeHasIssue) return wrap(`${adobeProduct} noted. What’s happening with it (freezing, crashing, errors, won’t open)?`);
-    if (adobeHasIssue) {
-      return {
-        answer: `Captured an Adobe issue${adobeProduct ? ` on ${adobeProduct}` : ""}. If it’s freezing or crashing, try closing it fully, wait 10 seconds, then reopen and test another PDF. Paste the exact error text if you see one.`,
-        followUp: pickFollowUp("Adobe issue"),
-      };
-    }
-    if (seen < 2) return wrap("Adobe detected. Tell me which Adobe app/version you’re using (Reader/Acrobat) and what’s happening.");
-    return {
-      answer: "Adobe question noted. Paste the exact Adobe product/version and the error you see, and I’ll pass it to IT if needed.",
-      followUp: pickFollowUp("Adobe issue"),
-    };
-  }
-
-  // Printers
-  if (topic === "printer") {
-    if (printers.length) {
-      const match = printers.find((p) => {
-        const nm = p.name?.toLowerCase() || "";
-        const ip = p.ip?.toLowerCase() || "";
-        return (nm && q.includes(nm)) || (ip && q.includes(ip));
-      });
-      if (match) {
-        const parts = [`Found printer "${match.name}"`, match.ip ? `IP ${match.ip}` : null].filter(Boolean);
-        return wrap(`${parts.join(" • ")}. What issue are you seeing (offline, jam, driver, not printing)?`);
+    for (const w of words) {
+      if (!w) continue;
+      if (w === p) {
+        score += 2;
+        break;
       }
-      const list = printers.map((p) => p.name).join(", ");
-      return wrap(`I see these printers: ${list}. Which one is failing and what’s the error (offline, jam, driver)?`);
+      // Allow light typo tolerance only when very close (distance <= 1)
+      if (Math.abs(w.length - p.length) <= 1 && levenshtein(w, p) <= 1) {
+        score += 1;
+        break;
+      }
     }
-    return wrap("No printers detected here. Tell me the printer name/IP and the problem so IT can assist.");
   }
+  return score;
+}
 
-  // VPN
-  if (topic === "vpn") {
-    if (lastVpnResult?.active) {
-      const seen = topicMentions("vpn");
-      if (seen < 2 && !recentIssueMention) return wrap(`VPN is connected (${lastVpnResult.name || "VPN"}${lastVpnResult.ip ? `, IP ${lastVpnResult.ip}` : ""}). What issue are you seeing?`);
-      return {
-        answer: `VPN reports connected (${lastVpnResult.name || "VPN"}${lastVpnResult.ip ? `, IP ${lastVpnResult.ip}` : ""}). Share any auth/connection error you see so I can capture it.`,
-        followUp: pickFollowUp("VPN connection issue"),
-      };
+function detectIntent(text: string): { intent: Intent; score: number } {
+  const norm = normalizeText(text);
+  if (!norm) return { intent: "UNKNOWN", score: 0 };
+  let best: { intent: Intent; score: number } = { intent: "UNKNOWN", score: 0 };
+  for (const cfg of INTENT_CONFIG) {
+    const s = matchScore(norm, cfg.patterns);
+    if (s > best.score) {
+      best = { intent: cfg.intent, score: s };
     }
+  }
+  return best;
+}
+
+function isDiagnosticsQuestion(text: string): boolean {
+  const lower = text.toLowerCase();
+  const keywords = [
+    "diagnostics",
+    "internet",
+    "network",
+    "wifi",
+    "vpn",
+    "connected",
+    "status",
+    "online",
+    "offline",
+    "public ip",
+    "gateway",
+    "drive",
+    "storage",
+    "space",
+    "free space",
+    "disk",
+    "cpu",
+    "uptime",
+    "antivirus",
+    "av",
+  ];
+  return keywords.some((k) => lower.includes(k));
+}
+
+function formatNumber(value?: number | null) {
+  if (value == null || Number.isNaN(value)) return "n/a";
+  return String(Math.round(value));
+}
+
+function buildDiagnosticsResponse(deviceStatus: DeviceStatus | undefined | null, flowState: ConversationState): AiResponse {
+  if (!deviceStatus) {
     return {
-      answer: "VPN isn’t connected. Are you using the Golpac VPN? If so, try reconnecting and share any auth/error text you see.",
-      followUp: pickFollowUp("VPN connection issue"),
+      answer:
+        "I can't see diagnostics right now. Please refresh the diagnostics panel. If the issue still persists, please contact Golpac IT Support or submit a support ticket.",
+      flow: flowState,
     };
   }
 
-  // Antivirus
-  if (topic === "antivirus") {
-    if (avItems.length) {
-      const status = avItems.map((item) => `${item.name}: ${item.running ? "running" : "not running"}`).join(" | ");
-      return wrap(`AV status: ${status}. If something shows as not running, restart and tell IT if it stays off.`);
-    }
-    return wrap("I don’t see Webroot/Checkpoint/Malwarebytes running. If you believe AV is installed, tell me which one.");
+  const lines: string[] = [];
+  const net = deviceStatus.network || {};
+  const sys = deviceStatus.system || {};
+  const health = deviceStatus.health || {};
+  const av = deviceStatus.antivirus || {};
+  const drivers = deviceStatus.drivers || {};
+  const storage = deviceStatus.storage || {};
+
+  const internetStatus = net.internetStatus || "unknown";
+  const vpnStatus = net.vpnStatus || "unknown";
+  const gateway = net.defaultGateway ?? null;
+  const publicIp = net.publicIp ?? null;
+  const uptime = health.uptime ?? "unknown";
+  const cpuUsage = health.cpuUsage;
+  const cpuName = sys.cpu || "Unknown";
+  const ram = sys.ram || "Unknown";
+  const avStatus = av.status || "unknown";
+  const avVendor = av.vendor || "Unknown";
+  const outdatedDrivers = drivers.outdatedCount;
+
+  const driveLines =
+    storage.drives?.slice(0, 2).map((d) => {
+      const usedPct = d.usedPercent == null ? "n/a" : `${Math.round(d.usedPercent)}%`;
+      const free = d.freeGb == null ? "n/a" : `${Math.round(d.freeGb)} GB free`;
+      return `${d.name || d.mount || "Drive"}: ${usedPct} used (${free})`;
+    }) || [];
+
+  lines.push(`Internet: ${internetStatus}${gateway ? ` • Gateway ${gateway}` : ""}${publicIp ? ` • Public IP ${publicIp}` : ""}`);
+  lines.push(`VPN: ${vpnStatus}`);
+  lines.push(`System: ${cpuName} • RAM ${ram} • Uptime ${uptime} • CPU ${formatNumber(cpuUsage)}%`);
+  lines.push(`Antivirus: ${avVendor} (${avStatus})`);
+  if (outdatedDrivers != null) {
+    lines.push(`Drivers: ${outdatedDrivers} outdated`);
+  }
+  if (driveLines.length > 0) {
+    lines.push(...driveLines);
   }
 
-  // System health
-  if (topic === "system") {
-    if (systemMetrics) {
-      const cpu = systemMetrics.cpu_usage_percent ? `CPU ~${Math.round(systemMetrics.cpu_usage_percent)}%` : null;
-      const ram = systemMetrics.memory_used_gb && systemMetrics.memory_total_gb ? `RAM ${systemMetrics.memory_used_gb.toFixed(1)} / ${systemMetrics.memory_total_gb.toFixed(1)} GB` : null;
-      const disk = systemMetrics.disks?.[0] ? `Drive ${systemMetrics.disks[0].name}: ${systemMetrics.disks[0].free_gb.toFixed(1)} GB free` : null;
-      const summary = [cpu, ram, disk].filter(Boolean).join(" • ");
-      return wrap(summary ? `System snapshot: ${summary}. Need me to check anything specific?` : "System snapshot is loaded. Anything specific you want me to check?");
-    }
-    return wrap("I don’t have system stats yet. Open the System tab to refresh, then ask again and I’ll summarize CPU/RAM/disk.");
-  }
+  return {
+    answer: `Based on the diagnostics panel, here's a quick summary:\n- ${lines.join("\n- ")}\n\nThis info will help IT troubleshoot faster. If the issue still persists, please contact Golpac IT Support or submit a support ticket.`,
+    flow: { activeIntent: flowState.activeIntent, stepIndex: flowState.stepIndex, sage: flowState.sage },
+  };
+}
 
-  // Error capture
-  if (isErrorMention) {
-    const codeMatch = q.match(/error[:\s#-]*([A-Za-z0-9._-]+)/i);
-    if (codeMatch && codeMatch[1]) {
-      const code = codeMatch[1];
-      return {
-        answer: `Error ${code} captured. Analyzing and trying to solve. If it keeps happening, submit a ticket with this code so IT can dig in.`,
-        followUp: pickFollowUp(`error ${code}`),
-      };
-    }
-    const quoted = question.match(/["“](.+?)["”]/);
-    if (quoted && quoted[1]) {
-      return {
-        answer: `I captured this error: “${quoted[1]}.” Quick try: close the app, wait 5 seconds, reopen, and retry.`,
-        followUp: pickFollowUp("error"),
-      };
-    }
+function fallbackPrompt() {
+  return "I'm not sure how to handle this automatically. Please contact Golpac IT Support or submit a ticket so a technician can help you directly.";
+}
+
+function summarizeForIntent(intent: Intent, details: string | null, errorDetail: string | null): string {
+  const safeDetails = details || "Not provided";
+  const safeError = errorDetail || "Not provided";
+  const base = `Here's what I'll pass to IT:\n- Details: ${safeDetails}\n- Notes: ${safeError}\nThis needs IT to resolve. Please submit a ticket or call Golpac IT at 888-585-0271.`;
+  if (intent === "PRINTERS") {
+    return `Thanks, here's what I'll pass to IT:\n- Printer: ${safeDetails}\n- Worked before today: ${safeError}\nThis needs IT to resolve. Please submit a ticket or call Golpac IT at 888-585-0271.`;
+  }
+  if (intent === "OUTLOOK_EMAIL" || intent === "OFFICE365") {
+    return `Thanks, here's what I'll pass to IT:\n- Outlook error: ${safeDetails}\n- Others affected: ${safeError}\nThis requires IT. Please submit a ticket or call Golpac IT at 888-585-0271.`;
+  }
+  if (intent === "SAGE300") {
+    return `Here's what I'll pass to IT:\n- Sage 300 module: ${safeDetails}\n- Error text/code: ${safeError}\nThis must be handled by IT. Please submit a ticket or call Golpac IT at 888-585-0271.`;
+  }
+  if (intent === "VPN") {
+    return `According to the diagnostics panel, I'm passing this to IT:\n- VPN details: ${safeDetails}\n- Issue: ${safeError}\nIf it still won't connect, please submit a ticket or call Golpac IT at 888-585-0271.`;
+  }
+  if (intent === "SHARED_DRIVE") {
+    return `Here's what I'll pass to IT:\n- Drive/folder: ${safeDetails}\n- Others affected: ${safeError}\nPlease submit a ticket or call Golpac IT at 888-585-0271 so IT can check permissions and the server side.`;
+  }
+  return base;
+}
+
+function startSageFlow(): AiResponse {
+  return {
+    answer:
+      "You're having a Sage 300 issue. Which module are you using (for example: General Ledger, Accounts Payable, Accounts Receivable, Project, Job Costing, Order Entry)?",
+    flow: { activeIntent: "SAGE300", stepIndex: 1, sage: {} },
+  };
+}
+
+function handleSageInProgress(message: string, state: ConversationState): AiResponse {
+  const current: ConversationState = {
+    activeIntent: "SAGE300",
+    stepIndex: state.stepIndex,
+    sage: { ...(state.sage || {}) },
+  };
+  const text = message.trim();
+
+  if (!current.sage?.module) {
+    current.sage = { ...current.sage, module: text };
+    current.stepIndex = 2;
     return {
-      answer: "You mentioned an error. Paste the exact wording or code and I’ll capture it for IT. If it keeps blocking you, submit a ticket or call 888-585-0271.",
-      followUp: pickFollowUp("issue"),
+      answer: "What exact error text or code do you see? I'm preparing this for IT.",
+      flow: current,
     };
   }
 
-  // Performance slowness
-  if (includesAny(perfWords)) {
-    const targetApps: string[] = [];
-    if (includesAny(["browser", "chrome", "edge", "firefox", "brwser"], q)) targetApps.push("browser");
-    if (includesAny(["outlook", "email", "o365", "office"], q)) targetApps.push("Outlook/email");
-    const appText = targetApps.length ? `, mainly ${targetApps.join(" and ")}` : "";
-    const perfSummary = () => {
-      if (!systemMetrics) return "I'll check CPU and memory to see what's heavy.";
-      const cpu = systemMetrics.cpu_usage_percent ? `CPU about ${Math.round(systemMetrics.cpu_usage_percent)}%` : null;
-      const ram = systemMetrics.memory_used_gb && systemMetrics.memory_total_gb ? `RAM ${systemMetrics.memory_used_gb.toFixed(1)} of ${systemMetrics.memory_total_gb.toFixed(1)} GB` : null;
-      const pieces = [cpu, ram].filter(Boolean);
-      return pieces.length === 0 ? "I'll check CPU and memory to see what's heavy." : `Current load: ${pieces.join(" • ")}.`;
+  if (!current.sage.errorText) {
+    current.sage.errorText = text;
+    const summary = `Here's what I'll pass to IT:\n- Sage 300 module: ${current.sage.module || "Not provided"}\n- Error text/code: ${current.sage.errorText || "Not provided"}\n\nThis must be handled by IT. Please submit a ticket or call Golpac IT at 888-585-0271.`;
+    return {
+      answer: summary,
+      flow: { activeIntent: undefined, stepIndex: 0, sage: undefined },
     };
-    return wrap(`Got it—things feel slow${appText}. ${perfSummary()} Try closing extra tabs/apps you don't need, then rerun the Test internet connection and VPN test if you use them. If it keeps freezing, submit a ticket so IT can review logs.`);
   }
 
-  return wrap("I can help with printers, VPN, internet checks, Sage/Adobe/Outlook issues, and antivirus status. Tell me what’s happening.");
+  return {
+    answer: "This requires deeper investigation by Golpac IT. Please open a ticket or call 888-585-0271.",
+    flow: { activeIntent: undefined, stepIndex: 0, sage: undefined },
+  };
+}
+
+function stepIndexForStep(step: FlowStep): number {
+  if (step === "ask_details") return 1;
+  if (step === "ask_error") return 2;
+  if (step === "summarize") return 0;
+  return 0;
+}
+
+function stepForIndex(idx: number): FlowStep {
+  if (idx <= 0) return "ask_details";
+  if (idx === 1) return "ask_error";
+  if (idx === 2) return "summarize";
+  return "done";
+}
+
+function getStepResponse(intent: Intent, step: FlowStep, recent: string[], _history: HistoryEntry[]): AiResponse {
+  const lastUser = recent.length > 0 ? recent[recent.length - 1] : "";
+  const prevUser = recent.length > 1 ? recent[recent.length - 2] : "";
+
+  const advance = (answer: string, next: FlowStep): AiResponse => ({
+    answer,
+    flow: { activeIntent: intent, stepIndex: stepIndexForStep(next) },
+  });
+
+  if (intent === "OUTLOOK_EMAIL" || intent === "OFFICE365") {
+    if (step === "ask_details") {
+      return advance(
+        "You're reporting an Outlook/email issue. I need two things:\n1) What error text do you see?\n2) Does email work for anyone else near you?",
+        "ask_error"
+      );
+    }
+    if (step === "ask_error") {
+      return advance(
+        "Thanks. Any other detail about sending vs receiving? I'm preparing this for IT.",
+        "summarize"
+      );
+    }
+    if (step === "summarize") {
+      return {
+        answer: "Preparing the Outlook/email notes for IT…",
+        followUp: summarizeForIntent("OUTLOOK_EMAIL", prevUser || lastUser, lastUser),
+        followUpDelayMs: 1200,
+        flow: { activeIntent: undefined, stepIndex: 0 },
+      };
+    }
+  }
+
+  if (intent === "PRINTERS") {
+    if (step === "ask_details") {
+      return advance(
+        "You're having a printing issue. Two quick things:\n1) Which printer are you trying to use?\n2) Has it worked before today?",
+        "ask_error"
+      );
+    }
+    if (step === "ask_error") {
+      return advance("Got it. Any error message or is it stuck in queue? I'm preparing this for IT.", "summarize");
+    }
+    if (step === "summarize") {
+      return {
+        answer: "Preparing the printer details for IT…",
+        followUp: summarizeForIntent("PRINTERS", prevUser || lastUser, lastUser),
+        followUpDelayMs: 1200,
+        flow: { activeIntent: undefined, stepIndex: 0 },
+      };
+    }
+  }
+
+  if (intent === "SAGE300") {
+    if (step === "ask_details") {
+      return advance(
+        "You're having a Sage 300 issue. Which module are you using (for example: General Ledger, Accounts Payable, Accounts Receivable, Project, Job Costing, Order Entry)?",
+        "ask_error"
+      );
+    }
+    if (step === "ask_error") {
+      return advance("What exact error text or code do you see? I'm preparing this for IT.", "summarize");
+    }
+    if (step === "summarize") {
+      return {
+        answer: "Preparing the Sage 300 details for IT…",
+        followUp: summarizeForIntent("SAGE300", prevUser || lastUser, lastUser),
+        followUpDelayMs: 1200,
+        flow: { activeIntent: undefined, stepIndex: 0 },
+      };
+    }
+  }
+
+  if (intent === "VPN") {
+    if (step === "ask_details") {
+      return advance(
+        "VPN issue noted. Which VPN are you using, and what happens when you try to connect?",
+        "ask_error"
+      );
+    }
+    if (step === "ask_error") {
+      return advance("Does it show any error code or just time out? I'm preparing this for IT.", "summarize");
+    }
+    if (step === "summarize") {
+      return {
+        answer: "Preparing the VPN details for IT…",
+        followUp: summarizeForIntent("VPN", prevUser || lastUser, lastUser),
+        followUpDelayMs: 1200,
+        flow: { activeIntent: undefined, stepIndex: 0 },
+      };
+    }
+  }
+
+  if (intent === "SHARED_DRIVE") {
+    if (step === "ask_details") {
+      return advance(
+        "Shared drive issue. Which drive letter or folder are you trying to access?",
+        "ask_error"
+      );
+    }
+    if (step === "ask_error") {
+      return advance("Can anyone else access it, or is it just you? I'm preparing this for IT.", "summarize");
+    }
+    if (step === "summarize") {
+      return {
+        answer: "Preparing the shared drive details for IT…",
+        followUp: summarizeForIntent("SHARED_DRIVE", prevUser || lastUser, lastUser),
+        followUpDelayMs: 1200,
+        flow: { activeIntent: undefined, stepIndex: 0 },
+      };
+    }
+  }
+
+  // Generic fallback intent
+  if (step === "ask_details") {
+    return advance(
+      "I can capture this for IT. What's the main issue and when did it start?",
+      "ask_error"
+    );
+  }
+  if (step === "ask_error") {
+    return advance("Any error text or recent changes you noticed? I'm preparing this for IT.", "summarize");
+  }
+  if (step === "summarize") {
+    return {
+      answer: "Preparing the details for IT…",
+      followUp: summarizeForIntent("GENERAL_IT", prevUser || lastUser, lastUser),
+      followUpDelayMs: 1200,
+      flow: { activeIntent: undefined, stepIndex: 0 },
+    };
+  }
+
+  return {
+    answer: "This requires deeper investigation by Golpac IT. Please open a ticket.",
+    flow: { activeIntent: intent, stepIndex: 0 },
+  };
+}
+
+export function buildAiAnswer(
+  question: string,
+  recent: string[] = [],
+  ctx: AiContext,
+  history: HistoryEntry[] = [],
+  conversationState: ConversationState = { stepIndex: 0 },
+  deviceStatus?: DeviceStatus | null
+): AiResponse {
+  void ctx;
+
+  const trimmedQuestion = question.trim();
+  const state = conversationState || { stepIndex: 0 };
+  const activeFlow = state.activeIntent;
+  const currentStepIndex = state.stepIndex || 0;
+  const looksLikeIssue = INTENT_CONFIG.some((cfg) => matchScore(trimmedQuestion, cfg.patterns) > 0);
+
+  if (!trimmedQuestion) {
+    return { answer: fallbackPrompt(), flow: { activeIntent: undefined, stepIndex: 0, sage: state.sage } };
+  }
+
+  if (!activeFlow && isDiagnosticsQuestion(trimmedQuestion) && !looksLikeIssue) {
+    return buildDiagnosticsResponse(deviceStatus, state);
+  }
+
+  // If a flow is active and mid-way, do not re-detect intent.
+  if (activeFlow) {
+    if (activeFlow === "SAGE300" && currentStepIndex > 0) {
+      return handleSageInProgress(trimmedQuestion, state);
+    }
+    if (currentStepIndex > 0) {
+      const step = stepForIndex(currentStepIndex);
+      const res = getStepResponse(activeFlow, step, recent, history);
+      if (res.flow) {
+        res.flow.sage = state.sage;
+      }
+      return res;
+    }
+  }
+
+  const { intent: detectedIntent, score } = detectIntent(trimmedQuestion);
+  const switchHint = SWITCH_HINTS.some((h) => normalizeText(trimmedQuestion).includes(normalizeText(h)));
+  const shouldStart = !activeFlow || switchHint || score >= 2;
+
+  if (shouldStart) {
+    const nextIntent = detectedIntent === "UNKNOWN" ? "GENERAL_IT" : detectedIntent;
+    if (nextIntent === "SAGE300") {
+      return startSageFlow();
+    }
+    const startRes = getStepResponse(nextIntent, "ask_details", recent, history);
+    return startRes;
+  }
+
+  // If already done or nothing matched, provide handoff.
+  if (stepForIndex(currentStepIndex) === "done") {
+    return {
+      answer: "This requires deeper investigation by Golpac IT. Please open a ticket or call 888-585-0271.",
+      flow: { activeIntent: undefined, stepIndex: 0, sage: state.sage },
+    };
+  }
+
+  return {
+    answer: fallbackPrompt(),
+    flow: { activeIntent: undefined, stepIndex: 0, sage: state.sage },
+  };
 }
