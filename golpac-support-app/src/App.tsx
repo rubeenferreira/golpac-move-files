@@ -974,11 +974,18 @@ function App() {
       if (result.outdated_count > 0) {
         const lines = result.sample.map((d, idx) => {
           const parts: string[] = [];
-          const name = d.device && d.device.trim() ? d.device.trim() : "Unknown device";
-          parts.push(`${idx + 1}. ${name}`);
-          if (d.version && d.version.trim()) parts.push(`Version ${d.version.trim()}`);
-          if (d.date && d.date.trim()) parts.push(`Date ${d.date.trim()}`);
-          return parts.join(" • ");
+          const name = d.device && d.device.trim() ? d.device.trim() : null;
+          const version = d.version && d.version.trim() ? d.version.trim() : null;
+          const date = d.date && d.date.trim() ? d.date.trim() : null;
+
+          const label =
+            name && name.toLowerCase() !== "unknown"
+              ? name
+              : `Device ${idx + 1} (name not reported)`;
+          parts.push(`${idx + 1}. ${label}`);
+          parts.push(`Version: ${version ?? "Not reported"}`);
+          parts.push(`Date: ${date ?? "Not reported"}`);
+          return parts.join(" | ");
         });
         if (result.outdated_count > lines.length) {
           lines.push(`(showing ${lines.length} of ${result.outdated_count} very old drivers)`);

@@ -168,6 +168,40 @@ function normalizeText(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function isGreeting(rawMessage: string): boolean {
+  const msg = rawMessage.trim().toLowerCase();
+  if (!msg) return false;
+  const cleaned = msg.replace(/[.!?,]/g, "");
+  if (cleaned.split(" ").length > 3) return false;
+
+  const singleWordGreetings = [
+    "hi",
+    "hello",
+    "hey",
+    "yo",
+    "sup",
+    "hola",
+    "hii",
+    "helo",
+    "helloo",
+  ];
+
+  if (singleWordGreetings.includes(cleaned)) return true;
+
+  if (
+    cleaned.startsWith("hi ") ||
+    cleaned.startsWith("hello ") ||
+    cleaned.startsWith("hey ") ||
+    cleaned.startsWith("good morning") ||
+    cleaned.startsWith("good afternoon") ||
+    cleaned.startsWith("good evening")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function levenshtein(a: string, b: string): number {
   const m = a.length;
   const n = b.length;
@@ -542,6 +576,14 @@ export function buildAiAnswer(
   const activeFlow = state.activeIntent;
   const currentStepIndex = state.stepIndex || 0;
   const looksLikeIssue = INTENT_CONFIG.some((cfg) => matchScore(trimmedQuestion, cfg.patterns) > 0);
+
+  if (isGreeting(trimmedQuestion)) {
+    return {
+      answer:
+        "Hi, I’m Golpac AI. I can help you describe issues with printers, Sage 300, Outlook/email, VPN, shared drives, or general IT. Tell me what’s not working and I’ll gather the right info for Golpac IT.",
+      flow: { activeIntent: undefined, stepIndex: 0, sage: undefined },
+    };
+  }
 
   if (!trimmedQuestion) {
     return { answer: fallbackPrompt(), flow: { activeIntent: undefined, stepIndex: 0, sage: state.sage } };
