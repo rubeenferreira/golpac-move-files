@@ -972,11 +972,24 @@ function App() {
         sample: { device: string; version: string; date: string }[];
       };
       if (result.outdated_count > 0) {
-        const lines = result.sample.map((d) => `${d.device || "Unknown"} • ${d.version || "?"} • ${d.date || "?"}`);
+        const lines = result.sample.map((d, idx) => {
+          const parts: string[] = [];
+          const name = d.device && d.device.trim() ? d.device.trim() : "Unknown device";
+          parts.push(`${idx + 1}. ${name}`);
+          if (d.version && d.version.trim()) parts.push(`Version ${d.version.trim()}`);
+          if (d.date && d.date.trim()) parts.push(`Date ${d.date.trim()}`);
+          return parts.join(" • ");
+        });
+        if (result.outdated_count > lines.length) {
+          lines.push(`(showing ${lines.length} of ${result.outdated_count} very old drivers)`);
+        }
+        if (lines.length === 0) {
+          lines.push("No details available from the scan.");
+        }
         setDriverState({
           status: "error",
           message: `Found ${result.outdated_count} very old driver(s).`,
-          details: lines.join("\n"),
+          details: `${lines.join("\n")}\n\nFor help updating these, please submit a ticket or call Golpac IT.`,
         });
       } else {
         setDriverState({
