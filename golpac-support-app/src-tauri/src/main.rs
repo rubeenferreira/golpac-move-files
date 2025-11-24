@@ -1417,7 +1417,9 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
 fn read_ticket_history(app_handle: tauri::AppHandle, filename: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        let mut path = tauri::api::path::app_data_dir(&app_handle.config())
+        let mut path = app_handle
+            .path()
+            .app_data_dir()
             .ok_or_else(|| "No app data dir".to_string())?;
         path.push(filename);
         return fs::read_to_string(&path).map_err(|e| e.to_string());
@@ -1432,7 +1434,9 @@ fn read_ticket_history(app_handle: tauri::AppHandle, filename: String) -> Result
 fn write_ticket_history(app_handle: tauri::AppHandle, filename: String, contents: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let mut path = tauri::api::path::app_data_dir(&app_handle.config())
+        let mut path = app_handle
+            .path()
+            .app_data_dir()
             .ok_or_else(|| "No app data dir".to_string())?;
         path.push(filename);
         if let Some(parent) = path.parent() {
