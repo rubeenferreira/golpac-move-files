@@ -324,7 +324,7 @@ fn get_driver_status() -> Result<DriverStatus, String> {
         let parsed: serde_json::Result<serde_json::Value> = serde_json::from_str(&stdout);
 
         let mut entries: Vec<DriverEntry> = Vec::new();
-        if let Ok(val) = parsed {
+        if let Ok(val) = parsed.as_ref() {
             match val {
                 serde_json::Value::Array(arr) => {
                     for item in arr.iter().take(5) {
@@ -377,6 +377,7 @@ fn get_driver_status() -> Result<DriverStatus, String> {
         }
 
         let count = parsed
+            .as_ref()
             .ok()
             .and_then(|v| v.as_array().map(|a| a.len()))
             .unwrap_or_else(|| if entries.is_empty() { 0 } else { 1 });
