@@ -18,6 +18,14 @@ type SystemMetrics = {
   memory_total_gb: number;
   disks?: { name: string; free_gb: number }[];
 };
+type PingResult = {
+  success: boolean;
+  attempts: number;
+  responses: number;
+  packet_loss?: number | null;
+  average_ms?: number | null;
+  target: string;
+};
 
 type AiContext = {
   isOffline: boolean;
@@ -163,6 +171,20 @@ const INTENT_CONFIG: IntentConfig[] = [
 ];
 
 const SWITCH_HINTS = ["new issue", "another issue", "different problem", "other problem", "new problem", "another thing", "new ticket"];
+const VPN_QUESTION_PATTERNS = ["vpn connected", "vpn status", "am i on vpn", "is vpn on", "check vpn", "vpn up", "vpn down"];
+const NETWORK_QUESTION_PATTERNS = [
+  "internet status",
+  "am i online",
+  "am i connected",
+  "network status",
+  "connection status",
+  "check internet",
+  "wifi status",
+  "ethernet status",
+  "no internet",
+  "offline",
+];
+const IP_QUESTION_PATTERNS = ["public ip", "ip address", "gateway", "default gateway", "what is my ip"];
 
 function normalizeText(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
@@ -257,6 +279,55 @@ function detectIntent(text: string): { intent: Intent; score: number } {
     }
   }
   return best;
+}
+
+function matchesPatterns(text: string, patterns: string[]): boolean {
+  const norm = normalizeText(text);
+  return patterns.some((p) => norm.includes(normalizeText(p)));
+}
+
+function buildVpnStatus(deviceStatus?: DeviceStatus | null): string {
+  const vpn = deviceStatus?.network?.vpnStatus || "unknown";
+  const internet = deviceStatus?.network?.internetStatus || "unknown";
+  const publicIp = deviceStatus?.network?.publicIp || null;
+  const gateway = deviceStatus?.network?.defaultGateway || null;
+  const vpnText =
+    vpn === "connected"
+      ? "VPN: connected"
+      : vpn === "disconnected"
+      ? "VPN: not connected"
+      : "VPN: status not reported";
+  const internetText =
+    internet === "online"
+      ? "Internet: online"
+      : internet === "offline"
+      ? "Internet: offline"
+      : internet === "degraded"
+      ? "Internet: degraded"
+      : "Internet: not reported";
+  const extras = [
+    gateway ? `Gateway: ${gateway}` : null,
+    publicIp ? `Public IP: ${publicIp}` : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  const detail = extras ? `\n${extras}` : "";
+  return `According to the diagnostics panel, ${vpnText} • ${internetText}${detail}\nIf this still isn't working, please open a ticket in the Golpac Support app.`;
+}
+
+function buildNetworkStatus(deviceStatus?: DeviceStatus | null, pingResult?: PingResult | null): string {
+  const internet = deviceStatus?.network?.internetStatus || "unknown";
+  if (internet === "offline") {
+    return "Your computer appears offline right now. If this isn't expected, please contact Golpac IT or submit a ticket.";
+  }
+  if (internet === "online" || internet === "degraded") {
+    const pingSummary =
+      pingResult && pingResult.average_ms != null
+        ? ` (avg ${Math.round(pingResult.average_ms)} ms${pingResult.packet_loss != null ? `, loss ${pingResult.packet_loss.toFixed(0)}%` : ""})`
+        : "";
+    return `Your computer appears connected to the network${pingSummary}. If you still have issues, please contact Golpac IT or submit a ticket.`;
+  }
+  return "I couldn't confirm the network status. If you're having trouble, please contact Golpac IT or submit a ticket.";
 }
 
 function isDiagnosticsQuestion(text: string): boolean {
@@ -582,6 +653,29 @@ export function buildAiAnswer(
       answer:
         "Hi, I’m Golpac AI. I can help you describe issues with printers, Sage 300, Outlook/email, VPN, shared drives, or general IT. Tell me what’s not working and I’ll gather the right info for Golpac IT.",
       flow: { activeIntent: undefined, stepIndex: 0, sage: undefined },
+    };
+  }
+
+  // Troubleshoot Q&A shortcuts (network/VPN/IP) before any flow handling.
+  if (
+    matchesPatterns(trimmedQuestion, VPN_QUESTION_PATTERNS) ||
+    matchesPatterns(trimmedQuestion, ["vpn"]) // direct vpn mention
+  ) {
+    return {
+      answer: buildVpnStatus(deviceStatus),
+      flow: { activeIntent: state.activeIntent, stepIndex: state.stepIndex || 0, sage: state.sage },
+    };
+  }
+  if (matchesPatterns(trimmedQuestion, NETWORK_QUESTION_PATTERNS)) {
+    return {
+      answer: buildNetworkStatus(deviceStatus, ctx.pingState.result as any),
+      flow: { activeIntent: state.activeIntent, stepIndex: state.stepIndex || 0, sage: state.sage },
+    };
+  }
+  if (matchesPatterns(trimmedQuestion, IP_QUESTION_PATTERNS)) {
+    return {
+      answer: buildNetworkStatus(deviceStatus, ctx.pingState.result as any),
+      flow: { activeIntent: state.activeIntent, stepIndex: state.stepIndex || 0, sage: state.sage },
     };
   }
 

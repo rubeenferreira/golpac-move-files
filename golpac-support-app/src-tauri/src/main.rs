@@ -19,6 +19,7 @@ use arboard::Clipboard;
 #[cfg(target_os = "windows")]
 use std::{
     env,
+    fs,
     os::windows::process::CommandExt,
     path::PathBuf,
     time::Instant,
@@ -54,6 +55,10 @@ const TRAY_MENU_ID_HOME: &str = "golpac-tray-home";
 const TRAY_MENU_ID_TROUBLESHOOT: &str = "golpac-tray-troubleshoot";
 #[cfg(target_os = "windows")]
 const TRAY_MENU_ID_SYSTEM: &str = "golpac-tray-system";
+#[cfg(target_os = "windows")]
+const TRAY_MENU_ID_AI: &str = "golpac-tray-ai";
+#[cfg(target_os = "windows")]
+const TRAY_MENU_ID_HISTORY: &str = "golpac-tray-history";
 #[cfg(target_os = "windows")]
 const TRAY_MENU_ID_QUIT: &str = "golpac-tray-quit";
 #[cfg(target_os = "windows")]
@@ -1366,6 +1371,8 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
     let tray_menu = MenuBuilder::new(app)
         .text(TRAY_MENU_ID_HOME, "Home")
         .text(TRAY_MENU_ID_TROUBLESHOOT, "Troubleshoot")
+        .text(TRAY_MENU_ID_AI, "Golpac AI (Beta)")
+        .text(TRAY_MENU_ID_HISTORY, "Ticket History")
         .text(TRAY_MENU_ID_SYSTEM, "System")
         .text(TRAY_MENU_ID_QUIT, "Quit Golpac Support")
         .build()?;
@@ -1382,6 +1389,14 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
                 reveal_main_window(app_handle);
                 emit_tray_navigation(app_handle, "troubleshoot");
             }
+            TRAY_MENU_ID_AI => {
+                reveal_main_window(app_handle);
+                emit_tray_navigation(app_handle, "ai");
+            }
+            TRAY_MENU_ID_HISTORY => {
+                reveal_main_window(app_handle);
+                emit_tray_navigation(app_handle, "history");
+            }
             TRAY_MENU_ID_SYSTEM => {
                 reveal_main_window(app_handle);
                 emit_tray_navigation(app_handle, "system");
@@ -1396,6 +1411,39 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
 
     tray_builder.build(app)?;
     Ok(())
+}
+
+#[tauri::command]
+fn read_ticket_history(app_handle: tauri::AppHandle, filename: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut path = tauri::api::path::app_data_dir(&app_handle.config())
+            .ok_or_else(|| "No app data dir".to_string())?;
+        path.push(filename);
+        return fs::read_to_string(&path).map_err(|e| e.to_string());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Not supported on this OS".to_string())
+    }
+}
+
+#[tauri::command]
+fn write_ticket_history(app_handle: tauri::AppHandle, filename: String, contents: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut path = tauri::api::path::app_data_dir(&app_handle.config())
+            .ok_or_else(|| "No app data dir".to_string())?;
+        path.push(filename);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(&path, contents).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Not supported on this OS".to_string())
+    }
 }
 
 //
@@ -1433,7 +1481,9 @@ fn main() {
             get_antivirus_status,
             launch_antivirus,
             get_driver_status,
-            exit_application
+            exit_application,
+            read_ticket_history,
+            write_ticket_history
         ])
         .setup(|app| {
             if let Err(e) = app.autolaunch().enable() {

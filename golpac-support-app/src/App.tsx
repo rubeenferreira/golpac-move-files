@@ -9,6 +9,7 @@ import golpacLogo from "./assets/golpac-logo.png";
 import { SystemPanel } from "./components/SystemPanel";
 import { TroubleshootPanel } from "./components/TroubleshootPanel";
 import { AiAssistant } from "./components/AiAssistant";
+import { TicketHistory, TicketRecord } from "./components/TicketHistory";
 
 type SystemInfo = {
   hostname: string;
@@ -91,6 +92,30 @@ type VpnStatus = {
 
 const PREFS_KEY = "golpac-support-preferences";
 const PRINTER_CACHE_KEY = "golpac-printers-cache";
+const TICKETS_KEY = "golpac-ticket-history";
+const TICKETS_FILE_NAME = "golpac-ticket-history.json";
+
+async function readTicketsFile(): Promise<TicketRecord[] | null> {
+  try {
+    const text = await invoke<string>("read_ticket_history", { filename: TICKETS_FILE_NAME });
+    const parsed = JSON.parse(text) as TicketRecord[];
+    if (Array.isArray(parsed)) return parsed;
+  } catch (err) {
+    console.warn("Ticket history file read failed:", err);
+  }
+  return null;
+}
+
+async function writeTicketsFile(records: TicketRecord[]) {
+  try {
+    await invoke("write_ticket_history", {
+      filename: TICKETS_FILE_NAME,
+      contents: JSON.stringify(records, null, 2),
+    });
+  } catch (err) {
+    console.warn("Ticket history file write failed:", err);
+  }
+}
 
 type PrinterCache = {
   printers: PrinterInfo[];
@@ -176,7 +201,7 @@ function App() {
   const [systemOverview, setSystemOverview] = useState<SystemInfo | null>(null);
   const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
   const [loadingAppContext, setLoadingAppContext] = useState(false);
-  const [activeNav, setActiveNav] = useState<"home" | "troubleshoot" | "system" | "ai">("home");
+  const [activeNav, setActiveNav] = useState<"home" | "troubleshoot" | "system" | "ai" | "history">("home");
   const [pingState, setPingState] = useState<PingState>({ status: "idle" });
   const [showPingDetails, setShowPingDetails] = useState(false);
   const [vpnState, setVpnState] = useState<PingState>({ status: "idle" });
@@ -189,13 +214,14 @@ function App() {
   >([]);
   const [aiQuestion, setAiQuestion] = useState("");
   const [aiHistory, setAiHistory] = useState<
-    { id: number; question: string; answer: string }[]
+    { id: number; question: string; answer: string; actionLabel?: string; actionTarget?: "troubleshoot" }[]
   >([]);
   const [aiFlow, setAiFlow] = useState<ConversationState>({
     activeIntent: undefined,
     stepIndex: 0,
     sage: undefined,
   });
+  const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
   const [aiTimer, setAiTimer] = useState<number | null>(null);
   const [aiFollowUpTimer, setAiFollowUpTimer] = useState<number | null>(null);
   const [aiAnalyzing, setAiAnalyzing] = useState(false);
@@ -203,6 +229,7 @@ function App() {
   const [updateAvailable, setUpdateAvailable] = useState<null | { version: string; notes?: string }>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [tickets, setTickets] = useState<TicketRecord[]>([]);
 
   const initialOffline =
     typeof navigator !== "undefined" ? !navigator.onLine : false;
@@ -381,7 +408,8 @@ function App() {
         target === "home" ||
         target === "troubleshoot" ||
         target === "system" ||
-        target === "ai"
+        target === "ai" ||
+        target === "history"
       ) {
         setActiveNav(target);
         if (target === "system") {
@@ -396,6 +424,29 @@ function App() {
     return () => {
       if (unlisten) unlisten();
     };
+  }, []);
+
+  useEffect(() => {
+    const loadTickets = async () => {
+      const fromFile = await readTicketsFile();
+      if (fromFile) {
+        setTickets(fromFile);
+        return;
+      }
+      // fallback to localStorage
+      try {
+        const raw = window.localStorage.getItem(TICKETS_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as TicketRecord[];
+          if (Array.isArray(parsed)) {
+            setTickets(parsed);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load ticket history:", err);
+      }
+    };
+    loadTickets();
   }, []);
 
   useEffect(() => {
@@ -415,6 +466,20 @@ function App() {
       loadAntivirusStatus();
     }
   }, [activeNav]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(TICKETS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as TicketRecord[];
+        if (Array.isArray(parsed)) {
+          setTickets(parsed);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load ticket history:", err);
+    }
+  }, []);
   useEffect(() => {
     if (activeNav === "system") {
       loadSystemMetrics();
@@ -749,13 +814,17 @@ function App() {
     }
   }
 
-  function buildDeviceStatus(): DeviceStatus {
+  function buildDeviceStatus(
+    pingOverride?: PingResult | null,
+    vpnOverride?: VpnStatus | null
+  ): DeviceStatus {
     const metrics = systemMetrics;
+    const pingResult = pingOverride ?? pingState.result;
     const internetStatus: "online" | "offline" | "degraded" | "unknown" = isOffline
       ? "offline"
       : (() => {
-          if (pingState.result?.success) {
-            const loss = pingState.result.packet_loss ?? 0;
+          if (pingResult?.success) {
+            const loss = pingResult.packet_loss ?? 0;
             if (loss > 20) return "degraded";
             return "online";
           }
@@ -763,8 +832,9 @@ function App() {
           return "unknown";
         })();
 
-    const vpnStatus: "connected" | "disconnected" | "unknown" = lastVpnResult
-      ? lastVpnResult.active
+    const vpnInfo = vpnOverride ?? lastVpnResult;
+    const vpnStatus: "connected" | "disconnected" | "unknown" = vpnInfo
+      ? vpnInfo.active
         ? "connected"
         : "disconnected"
       : "unknown";
@@ -828,19 +898,63 @@ function App() {
   }
 
 
-  function handleAskAi() {
+  function matchesAny(text: string, patterns: string[]) {
+    const norm = text.toLowerCase();
+    return patterns.some((p) => norm.includes(p.toLowerCase()));
+  }
+
+  async function handleAskAi() {
     const question = aiQuestion.trim();
     if (!question) return;
     const recent = aiHistory.slice(-3).map((m) => m.question);
-    const deviceStatus = buildDeviceStatus();
+    let pingResultOverride: PingResult | null | undefined;
+    let vpnResultOverride: VpnStatus | null | undefined;
+    let driverResultOverride: { outdated_count: number; sample: { device: string; version: string; date: string }[] } | null = null;
+    let deviceStatus = buildDeviceStatus();
+
+    // Auto-run troubleshooting actions when the question implies it.
+    const wantsVpnCheck = matchesAny(question, ["vpn status", "am i on vpn", "connected to vpn", "vpn connected", "check vpn"]);
+    const wantsNetworkCheck = matchesAny(question, ["am i online", "internet status", "network status", "check internet", "connected to network"]);
+    const wantsDriverCheck = matchesAny(question, ["driver", "drivers", "outdated driver", "old driver"]);
+
+    if (wantsVpnCheck || wantsNetworkCheck || wantsDriverCheck) {
+      setAiAnalyzing(true);
+      try {
+        if (wantsNetworkCheck) {
+          pingResultOverride = await handlePingTest();
+        }
+        if (wantsVpnCheck) {
+          vpnResultOverride = await handleVpnTest();
+        }
+        if (wantsDriverCheck) {
+          driverResultOverride = await handleDriverCheck();
+        }
+        deviceStatus = buildDeviceStatus(pingResultOverride, vpnResultOverride);
+      } catch (err) {
+        console.error("Auto-run troubleshoot failed:", err);
+      } finally {
+        setAiAnalyzing(false);
+      }
+    }
+
+    const pingStateForAnswer: PingState =
+      pingResultOverride != null
+        ? {
+            ...pingState,
+            result: pingResultOverride,
+            status: pingResultOverride.success ? "success" : "error",
+          }
+        : pingState;
+    const lastVpnForAnswer = vpnResultOverride ?? lastVpnResult;
+
     const response = buildAiAnswer(
       question,
       recent,
       {
         isOffline,
-        pingState,
+        pingState: pingStateForAnswer,
         printers,
-        lastVpnResult,
+        lastVpnResult: lastVpnForAnswer,
         avItems,
         systemMetrics,
       },
@@ -848,9 +962,23 @@ function App() {
       aiFlow,
       deviceStatus
     );
+    if (driverResultOverride) {
+      const count = driverResultOverride.outdated_count;
+      const hasNamed = driverResultOverride.sample.some(
+        (d) => d.device && d.device.trim() && d.device.toLowerCase() !== "unknown"
+      );
+      if (!hasNamed) {
+        response.answer = `Your scan found ${count} very old driver${count === 1 ? "" : "s"}. Names weren't reported. Please contact Golpac IT or submit a ticket for help updating them.`;
+        response.followUp = undefined;
+      }
+    }
     const baseId = Date.now();
+    const action =
+      wantsNetworkCheck || wantsVpnCheck || wantsDriverCheck
+        ? { actionLabel: "View details in Troubleshoot", actionTarget: "troubleshoot" as const }
+        : undefined;
     setAiHistory((prev) =>
-      [...prev, { id: baseId, question, answer: response.answer }].slice(-50)
+      [...prev, { id: baseId, question, answer: response.answer, ...action }].slice(-50)
     );
 
     if (response.flow) {
@@ -906,7 +1034,7 @@ function App() {
     setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined });
   }
 
-  async function handlePingTest() {
+  async function handlePingTest(): Promise<PingResult | null> {
     setPingState({ status: "loading" });
     setShowPingDetails(false);
     try {
@@ -919,6 +1047,7 @@ function App() {
         details,
         result,
       });
+      return result;
     } catch (err) {
       console.error("Failed to run ping test:", err);
       setPingState({
@@ -928,10 +1057,11 @@ function App() {
         details:
           err instanceof Error ? err.message : "Unknown error while testing.",
       });
+      return null;
     }
   }
 
-  async function handleVpnTest() {
+  async function handleVpnTest(): Promise<VpnStatus | null> {
     setVpnState({ status: "loading" });
     setShowVpnDetails(false);
     try {
@@ -954,6 +1084,7 @@ function App() {
           : null;
         setVpnState({ status: "error", message, details });
       }
+      return result;
     } catch (err) {
       console.error("Failed to check VPN status:", err);
       setVpnState({
@@ -961,10 +1092,11 @@ function App() {
         message: "Could not determine VPN status. Please try again.",
         details: err instanceof Error ? err.message : "Unknown error.",
       });
+      return null;
     }
   }
 
-  async function handleDriverCheck() {
+  async function handleDriverCheck(): Promise<{ outdated_count: number; sample: { device: string; version: string; date: string }[] } | null> {
     setDriverState({ status: "loading" });
     try {
       const result = (await invoke("get_driver_status")) as {
@@ -1004,6 +1136,7 @@ function App() {
           message: "No obviously outdated drivers detected.",
         });
       }
+      return result;
     } catch (err) {
       console.error("Failed to check drivers:", err);
       setDriverState({
@@ -1011,6 +1144,7 @@ function App() {
         message: "Could not check drivers. Please try again.",
         details: err instanceof Error ? err.message : "Unknown error",
       });
+      return null;
     }
   }
 
@@ -1047,7 +1181,7 @@ function App() {
     return <pre className="app-context-pre">{appContextDetails}</pre>;
   };
 
-  const handleNavClick = (tab: "home" | "troubleshoot" | "system" | "ai") => {
+  const handleNavClick = (tab: "home" | "troubleshoot" | "system" | "ai" | "history") => {
     setActiveNav(tab);
     if (tab === "system") {
       loadSystemMetrics();
@@ -1162,6 +1296,19 @@ function App() {
           urgency,
         };
           window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+          const record: TicketRecord = {
+            id: `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+            createdAt,
+            subject,
+            category,
+            description,
+            userEmail: userEmail || null,
+            urgency,
+          };
+          const nextTickets = [record, ...tickets].slice(0, 100);
+          setTickets(nextTickets);
+          window.localStorage.setItem(TICKETS_KEY, JSON.stringify(nextTickets));
+          await writeTicketsFile(nextTickets);
         } catch (err) {
           console.error("Failed to save preferences:", err);
         }
@@ -1226,10 +1373,18 @@ function App() {
             onClick={() => handleNavClick("ai")}
           >
             <span className="icon">🤖</span>
-            <span>Golpac AI</span>
+            <span>Golpac AI (Beta)</span>
           </button>
         </div>
         <div className="sidebar-bottom">
+          <button
+            type="button"
+            className={`side-button ${activeNav === "history" ? "active" : ""}`}
+            onClick={() => handleNavClick("history")}
+          >
+            <span className="icon">🗂</span>
+            <span>Ticket History</span>
+          </button>
           <button
             type="button"
             className={`side-button ${activeNav === "system" ? "active" : ""}`}
@@ -1566,6 +1721,15 @@ function App() {
               onClear={handleClearAi}
               history={aiHistory}
               analyzing={aiAnalyzing}
+              onOpenTroubleshoot={() => handleNavClick("troubleshoot")}
+            />
+          </main>
+        ) : activeNav === "history" ? (
+          <main className="shell-body troubleshoot-view">
+            <TicketHistory
+              tickets={tickets}
+              expandedId={expandedTicketId}
+              onToggle={(id) => setExpandedTicketId((prev) => (prev === id ? null : id))}
             />
           </main>
         ) : (

@@ -4,6 +4,8 @@ type Message = {
   id: number;
   question: string;
   answer: string;
+  actionLabel?: string;
+  actionTarget?: "troubleshoot";
 };
 
 type AiAssistantProps = {
@@ -13,6 +15,7 @@ type AiAssistantProps = {
   onClear: () => void;
   history: Message[];
   analyzing?: boolean;
+  onOpenTroubleshoot?: () => void;
 };
 
 export function AiAssistant({
@@ -22,6 +25,7 @@ export function AiAssistant({
   onClear,
   history,
   analyzing = false,
+  onOpenTroubleshoot,
 }: AiAssistantProps) {
   const disabled = !question.trim();
 
@@ -51,6 +55,17 @@ export function AiAssistant({
                   <div className="ai-msg bot">
                     <div className="ai-label">Golpac AI</div>
                     <div className="ai-text">{msg.answer}</div>
+                    {msg.actionLabel && msg.actionTarget === "troubleshoot" && onOpenTroubleshoot && (
+                      <div style={{ marginTop: 8 }}>
+                        <button
+                          type="button"
+                          className="secondary-btn"
+                          onClick={onOpenTroubleshoot}
+                        >
+                          {msg.actionLabel}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
