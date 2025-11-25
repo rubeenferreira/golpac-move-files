@@ -13,6 +13,20 @@ export enum OSType {
   UNKNOWN = 'Unknown'
 }
 
+// New Interfaces for Expanded View
+export interface AppUsageStat {
+  name: string;
+  usageMinutes: number;
+  percentage: number;
+  color?: string; // Optional, UI can assign if missing
+}
+
+export interface WebUsageStat {
+  domain: string;
+  visits: number;
+  category: string;
+}
+
 export interface Device {
   id: string;
   hostname: string;
@@ -25,8 +39,8 @@ export interface Device {
   userId: string;
   userName: string;
   company?: string; // The group/company assignment
-  appUsage?: AppUsageStat[];
-  webUsage?: WebUsageStat[];
+  appUsage?: AppUsageStat[]; // Real data from agent
+  webUsage?: WebUsageStat[]; // Real data from agent
 }
 
 export interface FleetStats {
@@ -47,17 +61,3 @@ export interface User {
 }
 
 export type ViewState = 'dashboard' | 'devices' | 'users';
-
-// New Interfaces for Expanded View
-export interface AppUsageStat {
-  name: string;
-  usageMinutes: number;
-  percentage: number;
-  color: string;
-}
-
-export interface WebUsageStat {
-  domain: string;
-  visits: number;
-  category: string;
-}

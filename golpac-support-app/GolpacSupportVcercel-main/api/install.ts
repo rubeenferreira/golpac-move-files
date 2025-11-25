@@ -5,6 +5,18 @@ export default async function handler(
   request: VercelRequest,
   response: VercelResponse
 ) {
+  const parseBody = (body: any) => {
+    if (!body) return {};
+    if (typeof body === "string") {
+      try {
+        return JSON.parse(body);
+      } catch {
+        return {};
+      }
+    }
+    return body;
+  };
+
   // Allow any origin to hit the install endpoint (protected by Token anyway)
   // This ensures your custom software/installer is never blocked by CORS
   const origin = request.headers.origin || '*';
@@ -47,7 +59,12 @@ export default async function handler(
   });
 
   try {
-    const data = request.body;
+    const raw = parseBody(request.body);
+    const data = {
+      ...raw,
+      appUsage: Array.isArray(raw?.appUsage) ? raw.appUsage : [],
+      webUsage: Array.isArray(raw?.webUsage) ? raw.webUsage : [],
+    };
     
     // Basic validation
     if (!data || !data.installId || !data.hostname) {

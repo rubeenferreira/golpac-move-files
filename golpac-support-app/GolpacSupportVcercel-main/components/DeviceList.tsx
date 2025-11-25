@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { Device, AppUsageStat, WebUsageStat } from '../types';
 import { Badge } from './ui/Badge';
-import { Search, Monitor, Calendar, Hash, Trash2, Building2, Edit2, X, ChevronDown, ChevronUp, Clock, Globe, PieChart as PieChartIcon, LayoutGrid } from 'lucide-react';
+import { Search, Monitor, Calendar, Hash, Trash2, Building2, Edit2, X, ChevronDown, ChevronUp, Clock, Globe, PieChart as PieChartIcon, LayoutGrid, Filter } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 
 interface DeviceListProps {
@@ -13,7 +13,7 @@ interface DeviceListProps {
   isReadOnly?: boolean;
 }
 
-// Mock Data Generator (Since API doesn't send usage data yet)
+// Mock Data Generator (Fallback only)
 const generateMockData = (os: string, dateRange: string) => {
   const isMac = os === 'macOS';
   
@@ -39,18 +39,31 @@ const generateMockData = (os: string, dateRange: string) => {
     { domain: 'docs.google.com', visits: 32, category: 'Productivity' },
   ];
 
-  // Randomize slightly based on date selection to simulate changes
-  return {
-      apps: apps.map(a => ({ ...a, percentage: Math.max(5, a.percentage + (Math.random() * 10 - 5)) })),
-      websites: websites.sort(() => Math.random() - 0.5)
-  };
+  return { apps, websites };
 };
+
+const COLORS = ['#0ea5e9', '#8b5cf6', '#f59e0b', '#10b981', '#6366f1', '#ec4899', '#f97316', '#64748b'];
 
 const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     
-    // Generate mock data based on the selected date (simulating a fetch)
-    const { apps, websites } = useMemo(() => generateMockData(device.os, date), [device.os, date]);
+    // Logic to determine if we have real data or should simulate
+    const hasRealData = (device.appUsage && device.appUsage.length > 0) || (device.webUsage && device.webUsage.length > 0);
+
+    const { apps, websites } = useMemo(() => {
+        if (hasRealData) {
+            // Use real data, assign colors if missing
+            const realApps = (device.appUsage || []).map((app, idx) => ({
+                ...app,
+                color: app.color || COLORS[idx % COLORS.length]
+            }));
+            const realWebs = device.webUsage || [];
+            return { apps: realApps, websites: realWebs };
+        } else {
+            // Fallback to mock data based on OS
+            return generateMockData(device.os, date);
+        }
+    }, [device, date, hasRealData]);
 
     return (
         <div className="bg-slate-50 p-6 border-t border-slate-100 shadow-inner animate-in slide-in-from-top-2 duration-300">
@@ -62,7 +75,9 @@ const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
                         <LayoutGrid size={16} className="text-brand-500"/>
                         Usage Analytics
                     </h3>
-                    <p className="text-xs text-slate-500">Activity report for {device.hostname}</p>
+                    <p className="text-xs text-slate-500">
+                        {hasRealData ? 'Live reported data' : `Simulated report for ${device.hostname}`}
+                    </p>
                 </div>
                 
                 <div className="flex items-center gap-2 bg-white p-1.5 rounded-lg border border-slate-200 shadow-sm">
@@ -72,7 +87,9 @@ const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
                         type="date" 
                         value={date}
                         onChange={(e) => setDate(e.target.value)}
-                        className="text-sm text-slate-700 focus:outline-none border-none bg-transparent"
+                        // If we have real data, we disable date picking for now as we only show latest snapshot
+                        disabled={hasRealData} 
+                        className={`text-sm text-slate-700 focus:outline-none border-none bg-transparent ${hasRealData ? 'opacity-50 cursor-not-allowed' : ''}`}
                     />
                 </div>
             </div>
@@ -85,6 +102,7 @@ const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
                         <PieChartIcon size={18} className="text-purple-500" />
                         Most Used Apps (Duration)
                     </h4>
+                    {apps.length > 0 ? (
                     <div className="flex flex-col sm:flex-row items-center gap-6">
                         <div className="h-48 w-48 shrink-0">
                             <ResponsiveContainer width="100%" height="100%">
@@ -125,6 +143,11 @@ const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
                             </ul>
                         </div>
                     </div>
+                    ) : (
+                        <div className="h-48 flex items-center justify-center text-slate-400 text-sm italic">
+                            No app usage data recorded.
+                        </div>
+                    )}
                 </div>
 
                 {/* Web Usage List */}
@@ -133,6 +156,7 @@ const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
                         <Globe size={18} className="text-blue-500" />
                         Most Viewed Websites
                     </h4>
+                    {websites.length > 0 ? (
                     <div className="overflow-hidden">
                         <table className="w-full text-sm text-left">
                             <thead className="bg-slate-50 text-slate-500 text-xs uppercase font-semibold">
@@ -155,7 +179,7 @@ const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
                                         </td>
                                         <td className="px-3 py-3">
                                             <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-                                                {site.category}
+                                                {site.category || 'General'}
                                             </span>
                                         </td>
                                         <td className="px-3 py-3 text-right font-mono text-slate-600">
@@ -166,6 +190,11 @@ const ExpandedDeviceView: React.FC<{ device: Device }> = ({ device }) => {
                             </tbody>
                         </table>
                     </div>
+                    ) : (
+                        <div className="h-48 flex items-center justify-center text-slate-400 text-sm italic">
+                            No web usage data recorded.
+                        </div>
+                    )}
                 </div>
 
             </div>
@@ -181,15 +210,20 @@ export const DeviceList: React.FC<DeviceListProps> = ({
     isReadOnly = false 
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCompanyFilter, setSelectedCompanyFilter] = useState('');
   const [editingDevice, setEditingDevice] = useState<Device | null>(null);
   const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
 
-  const filteredDevices = devices.filter(d => 
-    d.hostname.toLowerCase().includes(searchTerm.toLowerCase()) ||
+  const filteredDevices = devices.filter(d => {
+    const matchesSearch = d.hostname.toLowerCase().includes(searchTerm.toLowerCase()) ||
     d.userName.toLowerCase().includes(searchTerm.toLowerCase()) ||
     d.ipAddress.includes(searchTerm) ||
-    (d.company && d.company.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+    (d.company && d.company.toLowerCase().includes(searchTerm.toLowerCase()));
+
+    const matchesCompany = selectedCompanyFilter === '' || d.company === selectedCompanyFilter;
+
+    return matchesSearch && matchesCompany;
+  });
 
   const toggleExpand = (id: string) => {
       setExpandedDeviceId(prev => prev === id ? null : id);
@@ -204,15 +238,39 @@ export const DeviceList: React.FC<DeviceListProps> = ({
             <Monitor size={20} className="text-slate-500"/>
             {isReadOnly ? 'Assigned Devices' : 'All Devices'}
         </h2>
-        <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input 
-                type="text"
-                placeholder="Search hostname, user..."
-                className="pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 w-full sm:w-64"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-            />
+        
+        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+            {/* Company Filter Dropdown */}
+            <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <Filter size={16} className="text-slate-400" />
+                </div>
+                <select
+                    value={selectedCompanyFilter}
+                    onChange={(e) => setSelectedCompanyFilter(e.target.value)}
+                    className="pl-9 pr-8 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 w-full sm:w-48 appearance-none bg-white text-slate-700"
+                >
+                    <option value="">All Companies</option>
+                    {companies.map(c => (
+                        <option key={c} value={c}>{c}</option>
+                    ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                    <ChevronDown size={14} className="text-slate-400" />
+                </div>
+            </div>
+
+            {/* Search Input */}
+            <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input 
+                    type="text"
+                    placeholder="Search hostname, user..."
+                    className="pl-9 pr-4 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 w-full sm:w-64"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                />
+            </div>
         </div>
       </div>
 
@@ -314,7 +372,7 @@ export const DeviceList: React.FC<DeviceListProps> = ({
                         <td colSpan={isReadOnly ? 8 : 9} className="px-6 py-12 text-center text-slate-400">
                             {devices.length === 0 
                                 ? "No devices found assigned to your company." 
-                                : `No devices found matching "${searchTerm}"`}
+                                : `No devices found matching your filters.`}
                         </td>
                     </tr>
                 )}

@@ -15,7 +15,7 @@ type WebUsageStat = {
 };
 
 const INSTALL_ID_KEY = "golpac-install-id";
-const INSTALL_ENDPOINT = "https://golpac-support-vcercel.vercel.app/api/install";
+const INSTALL_ENDPOINT = "https://golpac-support-panel.vercel.app/api/install";
 const INSTALL_TOKEN = "dxTLRLGrGg3Jh2ZujTLaavsg";
 
 async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage: WebUsageStat[] }> {

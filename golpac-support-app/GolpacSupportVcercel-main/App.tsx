@@ -19,6 +19,11 @@ const App: React.FC = () => {
   const [companies, setCompanies] = useState<string[]>(MOCK_COMPANIES);
   const [loading, setLoading] = useState(true);
 
+  // Determine API Base URL
+  // If running locally (Vite), point to the production Vercel API.
+  // If running on Vercel, use relative path.
+  const API_BASE = process.env.NODE_ENV === 'development' ? 'https://golpac-support-panel.vercel.app' : '';
+
   // Initial Data Fetch Effect
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -26,7 +31,7 @@ const App: React.FC = () => {
     const fetchDevices = async () => {
       setLoading(true);
       try {
-        const response = await fetch('/api/devices');
+        const response = await fetch(`${API_BASE}/api/devices`);
         if (response.ok) {
             const data = await response.json();
             setDevices(data);
@@ -47,7 +52,7 @@ const App: React.FC = () => {
     };
 
     fetchDevices();
-  }, [isAuthenticated]);
+  }, [isAuthenticated, API_BASE]);
 
   // Auth Handlers
   const handleLogin = async (username: string, pass: string): Promise<boolean> => {
@@ -72,7 +77,7 @@ const App: React.FC = () => {
     // Optimistic UI update
     setDevices(prev => prev.filter(d => d.id !== id));
     try {
-        await fetch(`/api/devices?id=${id}`, { method: 'DELETE' });
+        await fetch(`${API_BASE}/api/devices?id=${id}`, { method: 'DELETE' });
     } catch (e) {
         console.error("Failed to delete device on server", e);
     }
@@ -82,7 +87,7 @@ const App: React.FC = () => {
     // Optimistic UI update
     setDevices(prev => prev.map(d => d.id === id ? { ...d, company } : d));
     try {
-      await fetch('/api/devices', {
+      await fetch(`${API_BASE}/api/devices`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, company })
