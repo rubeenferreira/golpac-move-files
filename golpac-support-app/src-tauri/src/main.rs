@@ -25,6 +25,8 @@ use std::{
     time::Instant,
 };
 #[cfg(target_os = "windows")]
+use serde_json::Value;
+#[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(target_os = "windows")]
 use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App};
@@ -82,6 +84,37 @@ struct SystemInfo {
     os_version: String,
     ipv4: String,
     domain: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Serialize, Deserialize, Debug)]
+struct AppUsageEntry {
+    name: String,
+    usageMinutes: f64,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Serialize, Deserialize, Debug)]
+struct WebUsageEntry {
+    domain: String,
+    visits: i64,
+    category: String,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Serialize)]
+struct UsageSnapshot {
+    appUsage: Vec<AppUsageWithColor>,
+    webUsage: Vec<WebUsageEntry>,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Serialize)]
+struct AppUsageWithColor {
+    name: String,
+    usageMinutes: f64,
+    percentage: f64,
+    color: String,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -1458,6 +1491,94 @@ fn write_ticket_history(app_handle: tauri::AppHandle, filename: String, contents
     }
 }
 
+#[cfg(target_os = "windows")]
+fn run_powershell_json(script: &str) -> Result<Value, String> {
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<Value>(&stdout).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn build_app_usage() -> Vec<AppUsageWithColor> {
+    let script = r#"
+        $procs = Get-Process | Where-Object { $_.CPU -gt 0 } |
+            Sort-Object -Property CPU -Descending |
+            Select-Object -First 6 @{
+                Name = "name"; Expression = { $_.ProcessName }
+            }, @{
+                Name = "usageMinutes"; Expression = { [math]::Round($_.CPU / 60, 2) }
+            }
+        $procs | ConvertTo-Json
+    "#;
+
+    let value = run_powershell_json(script).unwrap_or(Value::Null);
+    let entries: Vec<AppUsageEntry> = serde_json::from_value(value).unwrap_or_default();
+    if entries.is_empty() {
+        return Vec::new();
+    }
+
+    let total: f64 = entries.iter().map(|e| e.usageMinutes.max(0.1)).sum();
+    let palette = ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#3b82f6"];
+
+    entries
+        .into_iter()
+        .enumerate()
+        .map(|(idx, e)| AppUsageWithColor {
+            name: e.name,
+            usageMinutes: e.usageMinutes,
+            percentage: ((e.usageMinutes.max(0.1) / total) * 100.0 * 10.0).round() / 10.0,
+            color: palette[idx % palette.len()].to_string(),
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn build_web_usage() -> Vec<WebUsageEntry> {
+    let script = r#"
+        $items = Get-DnsClientCache | Where-Object { $_.EntryType -eq 'Host' } |
+            Select-Object -ExpandProperty Name |
+            Group-Object |
+            Sort-Object -Property Count -Descending |
+            Select-Object -First 6 @{
+                Name = "domain"; Expression = { $_.Name }
+            }, @{
+                Name = "visits"; Expression = { $_.Count }
+            }, @{
+                Name = "category"; Expression = { "DNS" }
+            }
+        $items | ConvertTo-Json
+    "#;
+
+    let value = run_powershell_json(script).unwrap_or(Value::Null);
+    serde_json::from_value::<Vec<WebUsageEntry>>(value).unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let app_usage = build_app_usage();
+        let web_usage = build_web_usage();
+        return Ok(UsageSnapshot { appUsage: app_usage, webUsage: web_usage });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Usage snapshot not supported on this OS".to_string())
+    }
+}
+
 //
 // ───────── Tauri main ─────────
 //
@@ -1495,7 +1616,8 @@ fn main() {
             get_driver_status,
             exit_application,
             read_ticket_history,
-            write_ticket_history
+            write_ticket_history,
+            get_usage_snapshot
         ])
         .setup(|app| {
             if let Err(e) = app.autolaunch().enable() {
