@@ -10,15 +10,8 @@ import { SystemPanel } from "./components/SystemPanel";
 import { TroubleshootPanel } from "./components/TroubleshootPanel";
 import { AiAssistant } from "./components/AiAssistant";
 import { TicketHistory, TicketRecord } from "./components/TicketHistory";
-
-type SystemInfo = {
-  hostname: string;
-  username: string;
-  os_version?: string;
-  osVersion?: string;
-  ipv4: string;
-  domain?: string | null;
-};
+import { registerInstall } from "./backend/registerInstall";
+import { SystemInfo } from "./types";
 
 type Urgency = "Low" | "Normal" | "High";
 
@@ -362,6 +355,10 @@ function App() {
       .then((info) => setSystemOverview(info))
       .catch((err) => console.error("Failed to preload system info:", err));
   }, []);
+
+  useEffect(() => {
+    registerInstall(() => loadSystemInfo(), appVersion);
+  }, [appVersion]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;

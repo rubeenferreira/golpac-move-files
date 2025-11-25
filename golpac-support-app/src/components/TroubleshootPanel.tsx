@@ -157,6 +157,17 @@ export function TroubleshootPanel({
       </div>
 
       <div className="troubleshoot-card">
+        <h2>Azure BitLocker</h2>
+        <p>Checks whether BitLocker keys are escrowed to Azure AD/Intune.</p>
+        <div className="ping-result">
+          <p>
+            This check isn't available from the app. If you need to confirm Azure BitLocker escrow status,
+            please submit a ticket or call Golpac IT.
+          </p>
+        </div>
+      </div>
+
+      <div className="troubleshoot-card">
         <h2>Antivirus status</h2>
         {antivirus.loading ? (
           <div className="ping-result">
