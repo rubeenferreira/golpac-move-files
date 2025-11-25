@@ -1,3 +1,4 @@
+
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@vercel/kv';
 
@@ -13,7 +14,7 @@ export default async function handler(
 
   response.setHeader('Access-Control-Allow-Origin', allowedOrigin);
   response.setHeader('Access-Control-Allow-Credentials', 'true');
-  response.setHeader('Access-Control-Allow-Methods', 'GET, DELETE, OPTIONS');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, DELETE, PATCH, OPTIONS');
   response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (request.method === 'OPTIONS') return response.status(200).end();
@@ -45,6 +46,31 @@ export default async function handler(
       } catch (error) {
           console.error("Delete failed:", error);
           return response.status(500).json({ error: 'Failed to delete' });
+      }
+  }
+
+  // Handle Update Device (Assign Group/Company)
+  if (request.method === 'PATCH') {
+      const { id, company } = request.body;
+      if (!id) return response.status(400).json({ error: 'Missing Device ID' });
+
+      try {
+          const existingData: any = await kv.get(`device:${id}`);
+          if (!existingData) {
+              return response.status(404).json({ error: 'Device not found' });
+          }
+
+          // Merge new company data with existing data
+          const updatedData = {
+              ...existingData,
+              company: company
+          };
+
+          await kv.set(`device:${id}`, updatedData);
+          return response.status(200).json({ ok: true });
+      } catch (error) {
+          console.error("Update failed:", error);
+          return response.status(500).json({ error: 'Failed to update device' });
       }
   }
 
@@ -93,7 +119,8 @@ export default async function handler(
             lastSeen: data.lastSeen || new Date().toISOString(),
             status: status, 
             userId: data.userId || data.installId.substring(0, 5),
-            userName: data.userName || 'System User' 
+            userName: data.userName || 'System User',
+            company: data.company || '' // Return the stored company
         };
     })
     .filter(Boolean)

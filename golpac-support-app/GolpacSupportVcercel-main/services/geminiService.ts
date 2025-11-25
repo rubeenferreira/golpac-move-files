@@ -48,12 +48,12 @@ export const analyzeFleetHealth = async (devices: Device[]): Promise<AnalysisRes
 
     // Extract grounding sources (deduplicated by URI)
     const rawSources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
-      ?.map(chunk => chunk.web)
-      .filter(web => web && web.uri && web.title) || [];
+      ?.map(chunk => chunk.web as any)
+      .filter((web: any) => web && web.uri && web.title) || [];
     
     // Simple deduplication based on URI
-    const uniqueSources = Array.from(new Map(rawSources.map(s => [s!.uri, s])).values())
-      .map(s => ({ title: s!.title!, uri: s!.uri! }));
+    const uniqueSources = Array.from(new Map(rawSources.map((s: any) => [s.uri, s])).values())
+      .map((s: any) => ({ title: s.title, uri: s.uri }));
 
     return { 
       markdown: response.text || "No analysis could be generated at this time.", 
@@ -91,11 +91,11 @@ export const askSupportChat = async (history: {role: 'user' | 'model', text: str
      
      // Extract sources for chat as well
      const rawSources = result.candidates?.[0]?.groundingMetadata?.groundingChunks
-      ?.map(chunk => chunk.web)
-      .filter(web => web && web.uri && web.title) || [];
+      ?.map(chunk => chunk.web as any)
+      .filter((web: any) => web && web.uri && web.title) || [];
     
-     const uniqueSources = Array.from(new Map(rawSources.map(s => [s!.uri, s])).values())
-      .map(s => ({ title: s!.title!, uri: s!.uri! }));
+     const uniqueSources = Array.from(new Map(rawSources.map((s: any) => [s.uri, s])).values())
+      .map((s: any) => ({ title: s.title, uri: s.uri }));
 
      return {
        text: result.text || "I didn't understand that.",

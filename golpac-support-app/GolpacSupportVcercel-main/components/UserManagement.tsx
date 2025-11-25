@@ -1,11 +1,14 @@
+
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
-import { Plus, Trash2, Shield, User as UserIcon, Building2, Search, X, Briefcase } from 'lucide-react';
+import { Plus, Trash2, Shield, User as UserIcon, Building2, Search, X, Briefcase, Edit2 } from 'lucide-react';
 
 interface UserManagementProps {
   users: User[];
   companies: string[];
+  currentUserRole?: UserRole;
   onAddUser: (user: Omit<User, 'id'>) => void;
+  onUpdateUser: (user: User) => void;
   onDeleteUser: (id: string) => void;
   onAddCompany: (name: string) => void;
   onDeleteCompany: (name: string) => void;
@@ -14,7 +17,9 @@ interface UserManagementProps {
 export const UserManagement: React.FC<UserManagementProps> = ({ 
     users, 
     companies, 
+    currentUserRole,
     onAddUser, 
+    onUpdateUser,
     onDeleteUser,
     onAddCompany,
     onDeleteCompany
@@ -22,9 +27,10 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   
   // Form State
-  const [newUser, setNewUser] = useState({
+  const [formData, setFormData] = useState({
     username: '',
     password: '',
     role: 'User' as UserRole,
@@ -38,17 +44,42 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     u.company.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (newUser.username && newUser.password) {
-      onAddUser(newUser);
-      setIsModalOpen(false);
-      setNewUser({
+  const isAdmin = currentUserRole === 'Admin';
+
+  const handleOpenCreate = () => {
+      setEditingUserId(null);
+      setFormData({
         username: '',
         password: '',
         role: 'User',
         company: companies[0] || ''
       });
+      setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (user: User) => {
+      setEditingUserId(user.id);
+      setFormData({
+          username: user.username,
+          password: user.password,
+          role: user.role,
+          company: user.company
+      });
+      setIsModalOpen(true);
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (formData.username && formData.password) {
+      if (editingUserId) {
+          onUpdateUser({
+              id: editingUserId,
+              ...formData
+          });
+      } else {
+          onAddUser(formData);
+      }
+      setIsModalOpen(false);
     }
   };
 
@@ -70,24 +101,28 @@ export const UserManagement: React.FC<UserManagementProps> = ({
              <Shield className="text-brand-600" />
              User Management
            </h2>
-           <p className="text-slate-500 text-sm">Create and manage access for admins and support staff.</p>
+           <p className="text-slate-500 text-sm">
+             {isAdmin ? 'Create and manage access for admins and support staff.' : 'View users and update your profile.'}
+           </p>
         </div>
-        <div className="flex gap-3">
-             <button 
-                onClick={() => setIsCompanyModalOpen(true)}
-                className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium shadow-sm transition-all"
-            >
-                <Briefcase size={18} />
-                Manage Companies
-            </button>
-            <button 
-                onClick={() => setIsModalOpen(true)}
-                className="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium shadow-sm transition-all active:scale-95"
-            >
-                <Plus size={18} />
-                Create User
-            </button>
-        </div>
+        {isAdmin && (
+            <div className="flex gap-3">
+                 <button 
+                    onClick={() => setIsCompanyModalOpen(true)}
+                    className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium shadow-sm transition-all"
+                >
+                    <Briefcase size={18} />
+                    Manage Companies
+                </button>
+                <button 
+                    onClick={handleOpenCreate}
+                    className="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2.5 rounded-lg flex items-center gap-2 font-medium shadow-sm transition-all active:scale-95"
+                >
+                    <Plus size={18} />
+                    Create User
+                </button>
+            </div>
+        )}
       </div>
 
       {/* Main Content */}
@@ -148,13 +183,24 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <button 
-                      onClick={() => onDeleteUser(user.id)}
-                      className="text-slate-400 hover:text-red-500 p-2 rounded-full hover:bg-red-50 transition-colors"
-                      title="Remove User"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <div className="flex justify-end gap-2">
+                        <button 
+                            onClick={() => handleOpenEdit(user)}
+                            className="text-slate-400 hover:text-brand-600 p-2 rounded-full hover:bg-brand-50 transition-colors"
+                            title="Edit User & Password"
+                        >
+                            <Edit2 size={16} />
+                        </button>
+                        {isAdmin && (
+                            <button 
+                                onClick={() => onDeleteUser(user.id)}
+                                className="text-slate-400 hover:text-red-500 p-2 rounded-full hover:bg-red-50 transition-colors"
+                                title="Remove User"
+                            >
+                                <Trash2 size={16} />
+                            </button>
+                        )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -170,14 +216,16 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         </div>
       </div>
 
-      {/* Create User Modal */}
+      {/* Create/Edit User Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setIsModalOpen(false)} />
           
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md relative z-10 animate-in zoom-in-95 duration-200 overflow-hidden">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <h3 className="text-lg font-bold text-slate-800">Create New User</h3>
+              <h3 className="text-lg font-bold text-slate-800">
+                  {editingUserId ? 'Edit User' : 'Create New User'}
+              </h3>
               <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={20} />
               </button>
@@ -192,70 +240,89 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                   <input 
                     type="text" 
                     required
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    readOnly={!isAdmin && !!editingUserId} // Prevent non-admins from changing username
+                    className={`w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 ${!isAdmin ? 'bg-slate-50 text-slate-500' : ''}`}
                     placeholder="jdoe"
-                    value={newUser.username}
-                    onChange={e => setNewUser({...newUser, username: e.target.value})}
+                    value={formData.username}
+                    onChange={e => setFormData({...formData, username: e.target.value})}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                      {editingUserId ? 'New Password' : 'Password'}
+                  </label>
                   <input 
                     type="text" 
                     required
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
-                    placeholder="Temporary password"
-                    value={newUser.password}
-                    onChange={e => setNewUser({...newUser, password: e.target.value})}
+                    placeholder={editingUserId ? "Enter new password to update" : "Temporary password"}
+                    value={formData.password}
+                    onChange={e => setFormData({...formData, password: e.target.value})}
                   />
+                  {editingUserId && <p className="text-xs text-slate-400 mt-1">Change this field to update the password.</p>}
                 </div>
               </div>
 
               {/* Role */}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Role</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setNewUser({...newUser, role: 'Admin'})}
-                    className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
-                      newUser.role === 'Admin' 
-                        ? 'bg-purple-50 border-purple-200 text-purple-700 ring-1 ring-purple-200' 
-                        : 'border-slate-200 text-slate-600 hover:border-slate-300'
-                    }`}
-                  >
-                    Admin
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewUser({...newUser, role: 'User'})}
-                    className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
-                      newUser.role === 'User' 
-                        ? 'bg-blue-50 border-blue-200 text-blue-700 ring-1 ring-blue-200' 
-                        : 'border-slate-200 text-slate-600 hover:border-slate-300'
-                    }`}
-                  >
-                    User
-                  </button>
-                </div>
+                {isAdmin ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, role: 'Admin'})}
+                      className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
+                        formData.role === 'Admin' 
+                          ? 'bg-purple-50 border-purple-200 text-purple-700 ring-1 ring-purple-200' 
+                          : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                      }`}
+                    >
+                      Admin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, role: 'User'})}
+                      className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
+                        formData.role === 'User' 
+                          ? 'bg-blue-50 border-blue-200 text-blue-700 ring-1 ring-blue-200' 
+                          : 'border-slate-200 text-slate-600 hover:border-slate-300'
+                      }`}
+                    >
+                      User
+                    </button>
+                  </div>
+                ) : (
+                    <div className="w-full px-3 py-2 border border-slate-200 bg-slate-100 rounded-lg text-slate-500 text-sm flex items-center justify-between">
+                        <span>{formData.role}</span>
+                        <span className="text-xs italic text-slate-400">Restricted</span>
+                    </div>
+                )}
               </div>
 
               {/* Company Selection */}
               <div>
                  <label className="block text-sm font-medium text-slate-700 mb-1">Access Company</label>
-                 <div className="relative">
-                    <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <select
-                      className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 appearance-none bg-white"
-                      value={newUser.company}
-                      onChange={e => setNewUser({...newUser, company: e.target.value})}
-                    >
-                      {companies.map(company => (
-                        <option key={company} value={company}>{company}</option>
-                      ))}
-                    </select>
-                 </div>
-                 <p className="text-xs text-slate-400 mt-1">Select the organization this user will support.</p>
+                 {isAdmin ? (
+                     <div className="relative">
+                        <Building2 size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <select
+                          className="w-full pl-9 pr-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 appearance-none bg-white"
+                          value={formData.company}
+                          onChange={e => setFormData({...formData, company: e.target.value})}
+                        >
+                          {companies.map(company => (
+                            <option key={company} value={company}>{company}</option>
+                          ))}
+                        </select>
+                     </div>
+                 ) : (
+                    <div className="w-full px-3 py-2 border border-slate-200 bg-slate-100 rounded-lg text-slate-500 text-sm flex items-center gap-2">
+                        <Building2 size={16} />
+                        <span>{formData.company}</span>
+                        <span className="ml-auto text-xs italic text-slate-400">Restricted</span>
+                    </div>
+                 )}
+                 {isAdmin && <p className="text-xs text-slate-400 mt-1">Select the organization this user will support.</p>}
               </div>
 
               <div className="pt-4 mt-4 border-t border-slate-100 flex gap-3">
@@ -270,7 +337,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                   type="submit"
                   className="flex-1 px-4 py-2 bg-brand-600 text-white font-medium rounded-lg hover:bg-brand-700 shadow-sm transition-colors"
                 >
-                  Create User
+                  {editingUserId ? 'Update User' : 'Create User'}
                 </button>
               </div>
 

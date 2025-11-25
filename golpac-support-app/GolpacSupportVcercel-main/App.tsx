@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
@@ -30,7 +31,13 @@ const App: React.FC = () => {
             const data = await response.json();
             setDevices(data);
         } else {
-            console.error("Failed to fetch devices");
+            console.error("Failed to fetch devices. Status:", response.status);
+            // If the response is HTML (often 404/500 pages), log text for debug
+            const contentType = response.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") === -1) {
+                const text = await response.text();
+                console.error("Received HTML instead of JSON:", text.substring(0, 100));
+            }
         }
       } catch (error) {
         console.error("Failed to fetch devices", error);
@@ -71,6 +78,20 @@ const App: React.FC = () => {
     }
   };
 
+  const handleAssignDeviceCompany = async (id: string, company: string) => {
+    // Optimistic UI update
+    setDevices(prev => prev.map(d => d.id === id ? { ...d, company } : d));
+    try {
+      await fetch('/api/devices', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, company })
+      });
+    } catch (e) {
+      console.error("Failed to update device group", e);
+    }
+  };
+
   // User Management Handlers
   const handleAddUser = (userData: Omit<User, 'id'>) => {
     const newUser: User = {
@@ -78,6 +99,14 @@ const App: React.FC = () => {
       id: Math.random().toString(36).substr(2, 9)
     };
     setUsers([...users, newUser]);
+  };
+
+  const handleUpdateUser = (updatedUser: User) => {
+    setUsers(users.map(u => u.id === updatedUser.id ? updatedUser : u));
+    // If the currently logged in user is being updated, reflect changes immediately
+    if (currentUser && currentUser.id === updatedUser.id) {
+        setCurrentUser(updatedUser);
+    }
   };
 
   const handleDeleteUser = (id: string) => {
@@ -103,6 +132,17 @@ const App: React.FC = () => {
     return <AuthPage onLogin={handleLogin} />;
   }
 
+  // --- Logic to filter devices based on User Role ---
+  // If Admin, see all. If User, see only their company's devices.
+  const getVisibleDevices = () => {
+    if (!currentUser) return [];
+    if (currentUser.role === 'Admin') return devices;
+    return devices.filter(d => d.company === currentUser.company);
+  };
+
+  const visibleDevices = getVisibleDevices();
+  const isReadOnly = currentUser?.role !== 'Admin';
+
   const renderContent = () => {
     if (loading) {
       return (
@@ -115,15 +155,25 @@ const App: React.FC = () => {
 
     switch (currentView) {
       case 'dashboard':
-        return <Dashboard devices={devices} />;
+        return <Dashboard devices={visibleDevices} />;
       case 'devices':
-        return <DeviceList devices={devices} onDeleteDevice={handleDeleteDevice} />;
+        return (
+          <DeviceList 
+            devices={visibleDevices} 
+            companies={companies}
+            onDeleteDevice={handleDeleteDevice}
+            onAssignCompany={handleAssignDeviceCompany}
+            isReadOnly={isReadOnly}
+          />
+        );
       case 'users':
         return (
           <UserManagement 
             users={users} 
             companies={companies}
+            currentUserRole={currentUser?.role}
             onAddUser={handleAddUser}
+            onUpdateUser={handleUpdateUser}
             onDeleteUser={handleDeleteUser}
             onAddCompany={handleAddCompany}
             onDeleteCompany={handleDeleteCompany}
@@ -149,8 +199,8 @@ const App: React.FC = () => {
                {currentView === 'devices' && 'Device Management'}
              </h1>
              <p className="text-slate-500">
-               {currentView === 'dashboard' && 'Real-time metrics for your application deployments.'}
-               {currentView === 'devices' && 'View and manage all computers with the Golpac app installed.'}
+               {currentView === 'dashboard' && `Real-time metrics for ${currentUser?.role === 'Admin' ? 'all fleets' : currentUser?.company}.`}
+               {currentView === 'devices' && `View ${isReadOnly ? '' : 'and manage'} devices for ${currentUser?.role === 'Admin' ? 'all companies' : currentUser?.company}.`}
              </p>
           </div>
         )}

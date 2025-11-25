@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, ArrowRight, Lock, KeyRound, User, AlertCircle } from 'lucide-react';
+import { ArrowRight, Lock, KeyRound, User, AlertCircle } from 'lucide-react';
 
 interface AuthPageProps {
   onLogin: (username: string, pass: string) => Promise<boolean>;
@@ -28,6 +28,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLogin }) => {
     }, 800);
   };
 
+  const logoUrl = "https://static.wixstatic.com/media/297e13_91fceac09fe745458d11b50051949432~mv2.png/v1/fill/w_194,h_110,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/logo_footer.png";
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 font-sans">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden animate-in fade-in zoom-in duration-500">
@@ -37,12 +39,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLogin }) => {
           {/* Decorative background circle */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-brand-500/30 rounded-full blur-3xl"></div>
           
-          <div className="relative z-10">
-            <div className="w-20 h-20 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl mx-auto flex items-center justify-center mb-6 shadow-lg">
-               <ShieldCheck size={40} className="text-white" />
+          <div className="relative z-10 flex flex-col items-center">
+            <div className="mb-6 h-32 flex items-center justify-center">
+               <img src={logoUrl} alt="Golpac Logo" className="h-full object-contain" />
             </div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">Golpac Support IT</h1>
-            <p className="text-brand-100 mt-2 font-medium">Secure Management Portal</p>
+            <p className="text-brand-100 font-medium">Secure Management Portal</p>
           </div>
         </div>
 
@@ -115,11 +116,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLogin }) => {
               )}
             </button>
           </form>
-
-          <div className="mt-8 flex items-center justify-center space-x-2 text-xs text-slate-400">
-            <Lock size={12} />
-            <span>256-bit Encryption &bull; Authorized Personnel Only</span>
-          </div>
         </div>
       </div>
       

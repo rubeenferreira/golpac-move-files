@@ -1,3 +1,4 @@
+
 export enum DeviceStatus {
   ONLINE = 'Online',
   OFFLINE = 'Offline',
@@ -23,6 +24,9 @@ export interface Device {
   status: DeviceStatus;
   userId: string;
   userName: string;
+  company?: string; // The group/company assignment
+  appUsage?: AppUsageStat[];
+  webUsage?: WebUsageStat[];
 }
 
 export interface FleetStats {
@@ -43,3 +47,17 @@ export interface User {
 }
 
 export type ViewState = 'dashboard' | 'devices' | 'users';
+
+// New Interfaces for Expanded View
+export interface AppUsageStat {
+  name: string;
+  usageMinutes: number;
+  percentage: number;
+  color: string;
+}
+
+export interface WebUsageStat {
+  domain: string;
+  visits: number;
+  category: string;
+}

@@ -26,16 +26,21 @@ export const Layout: React.FC<LayoutProps> = ({ currentView, onChangeView, child
     </button>
   );
 
+  const logoUrl = "https://static.wixstatic.com/media/297e13_91fceac09fe745458d11b50051949432~mv2.png/v1/fill/w_194,h_110,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/logo_footer.png";
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans">
       {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col">
         <div className="p-6 border-b border-slate-100">
-           <div className="flex items-center space-x-2">
-             <div className="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
-                <span className="text-white font-bold text-lg">G</span>
+           <div className="flex items-center gap-3">
+             <div className="h-12 px-3 bg-brand-600 rounded-xl flex items-center justify-center shadow-sm overflow-hidden shrink-0">
+                <img src={logoUrl} alt="Golpac" className="h-full w-auto object-contain py-2" />
              </div>
-             <span className="text-lg font-bold text-slate-800 tracking-tight leading-tight">Golpac Support <span className="text-brand-600 block text-base">IT - Panel</span></span>
+             <div className="flex flex-col">
+                <span className="text-lg font-bold text-slate-800 leading-none">Support</span>
+                <span className="text-brand-600 font-bold text-xs uppercase tracking-wider">IT - Panel</span>
+             </div>
            </div>
         </div>
         
@@ -78,7 +83,12 @@ export const Layout: React.FC<LayoutProps> = ({ currentView, onChangeView, child
       <main className="flex-1 flex flex-col h-screen overflow-hidden">
         {/* Mobile Header */}
         <header className="md:hidden bg-white border-b border-slate-200 p-4 flex items-center justify-between">
-           <span className="font-bold text-slate-800">Golpac Support IT</span>
+           <div className="flex items-center gap-3">
+                <div className="h-9 px-2 bg-brand-600 rounded-lg flex items-center justify-center shrink-0">
+                     <img src={logoUrl} alt="Golpac" className="h-full w-auto object-contain py-1.5" />
+                </div>
+                <span className="font-bold text-slate-800 text-sm">Golpac Support</span>
+           </div>
            <button onClick={() => onChangeView('users')} className="text-slate-500"><Settings /></button>
         </header>
 
