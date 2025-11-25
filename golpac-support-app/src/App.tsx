@@ -10,7 +10,7 @@ import { SystemPanel } from "./components/SystemPanel";
 import { TroubleshootPanel } from "./components/TroubleshootPanel";
 import { AiAssistant } from "./components/AiAssistant";
 import { TicketHistory, TicketRecord } from "./components/TicketHistory";
-import { registerInstall } from "./backend/registerInstall";
+import { registerInstall, sendInstallHeartbeat } from "./backend/registerInstall";
 import { SystemInfo } from "./types";
 
 type Urgency = "Low" | "Normal" | "High";
@@ -365,6 +365,14 @@ function App() {
 
   useEffect(() => {
     registerInstall(() => loadSystemInfo(), appVersion);
+  }, [appVersion]);
+
+  useEffect(() => {
+    if (!appVersion) return;
+    const runHeartbeat = () => sendInstallHeartbeat(appVersion);
+    runHeartbeat();
+    const interval = window.setInterval(runHeartbeat, 5 * 60 * 1000);
+    return () => window.clearInterval(interval);
   }, [appVersion]);
 
   useEffect(() => {
