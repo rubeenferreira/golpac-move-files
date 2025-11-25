@@ -31,7 +31,6 @@ function buildMockUsage(seed: string, osVersion?: string | null): {
   webUsage: WebUsageStat[];
 } {
   const isMac = (osVersion || "").toLowerCase().includes("mac");
-  const isWin = (osVersion || "").toLowerCase().includes("win");
 
   const apps: Omit<AppUsageStat, "percentage">[] = isMac
     ? [
