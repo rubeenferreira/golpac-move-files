@@ -8,6 +8,13 @@ export type AiResponse = {
   flow?: ConversationState;
   actionLabel?: string;
   actionTarget?: "troubleshoot" | "ticket";
+  ticketData?: {
+    subject?: string;
+    category?: string;
+    description?: string;
+    userEmail?: string | null;
+    urgency?: string;
+  };
 };
 
 type PrinterInfo = { name: string; ip?: string | null; status?: string | null };
@@ -72,6 +79,13 @@ export interface ConversationState {
   stepIndex: number;
   sage?: SageSlots;
   slots?: Record<string, string>;
+  ticketDraft?: {
+    subject?: string;
+    category?: string;
+    description?: string;
+    userEmail?: string | null;
+    urgency?: string;
+  };
 }
 type HistoryEntry = { question: string; answer: string };
 
@@ -545,39 +559,6 @@ function startSageFlow(): AiResponse {
   };
 }
 
-function handleSageInProgress(message: string, state: ConversationState): AiResponse {
-  const current: ConversationState = {
-    activeIntent: "SAGE300",
-    stepIndex: state.stepIndex,
-    sage: { ...(state.sage || {}) },
-    slots: { ...(state.slots || {}) },
-  };
-  const text = message.trim();
-
-  if (!current.sage?.module) {
-    current.sage = { ...current.sage, module: text };
-    current.stepIndex = 2;
-    return {
-      answer: "What exact error text or code do you see? I'm preparing this for IT.",
-      flow: current,
-    };
-  }
-
-  if (!current.sage.errorText) {
-    current.sage.errorText = text;
-    const summary = `Here's what I'll pass to IT:\n- Sage 300 module: ${current.sage.module || "Not provided"}\n- Error text/code: ${current.sage.errorText || "Not provided"}\n\nThis must be handled by IT. Please submit a ticket or call Golpac IT at 888-585-0271.`;
-    return {
-      answer: summary,
-      flow: { activeIntent: undefined, stepIndex: 0, sage: undefined },
-    };
-  }
-
-  return {
-    answer: "This requires deeper investigation by Golpac IT. Please open a ticket or call 888-585-0271.",
-    flow: { activeIntent: undefined, stepIndex: 0, sage: undefined },
-  };
-}
-
 function stepForIndex(idx: number): FlowStep {
   if (idx <= 0) return "ask_details";
   if (idx === 1) return "ask_error";
@@ -606,13 +587,17 @@ function getStepResponse(intent: Intent, step: FlowStep, slots: Record<string, s
 
   if (step === "summarize") {
     if (userAnswer && !nextSlots["second"]) nextSlots["second"] = userAnswer;
+    const ticketData = {
+      subject: nextSlots["subject"] || "",
+      category: intent,
+      description: `${nextSlots["first"] || ""}${nextSlots["second"] ? `\n${nextSlots["second"]}` : ""}`.trim(),
+    };
     return {
       answer: "Preparing the details for IT…",
       followUp: summarizeForIntent(flowCfg.summaryIntent, nextSlots["first"] || null, nextSlots["second"] || null),
       followUpDelayMs: 1200,
-      flow: { activeIntent: undefined, stepIndex: 0, slots: {} },
-      actionLabel: "Open ticket form",
-      actionTarget: "ticket",
+      flow: { activeIntent: undefined, stepIndex: 0, slots: {}, ticketDraft: ticketData },
+      ticketData,
     };
   }
 
@@ -679,9 +664,6 @@ export function buildAiAnswer(
 
   // If a flow is active and mid-way, do not re-detect intent.
   if (activeFlow) {
-    if (activeFlow === "SAGE300" && currentStepIndex > 0) {
-      return handleSageInProgress(trimmedQuestion, state);
-    }
     if (currentStepIndex > 0) {
       const step = stepForIndex(currentStepIndex);
       return getStepResponse(activeFlow, step, state.slots || {}, trimmedQuestion);

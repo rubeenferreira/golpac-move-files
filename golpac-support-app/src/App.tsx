@@ -221,6 +221,15 @@ function App() {
     stepIndex: 0,
     sage: undefined,
   });
+  const [aiTicketFormOpen, setAiTicketFormOpen] = useState(false);
+  const [aiTicketDraft, setAiTicketDraft] = useState<{
+    subject: string;
+    category: Category;
+    description: string;
+    userEmail: string;
+    urgency: Urgency;
+  }>({ subject: "", category: "General", description: "", userEmail: "", urgency: "Normal" });
+  const [lastTicketDraft, setLastTicketDraft] = useState<typeof aiTicketDraft | null>(null);
   const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
   const [aiTimer, setAiTimer] = useState<number | null>(null);
   const [aiFollowUpTimer, setAiFollowUpTimer] = useState<number | null>(null);
@@ -744,14 +753,6 @@ function App() {
     }
   }
 
-  async function handleExitApp() {
-    try {
-      await invoke("exit_application");
-    } catch (err) {
-      console.error("Failed to exit app:", err);
-    }
-  }
-
   async function handleLaunchAntivirus(name: string) {
     try {
       await invoke("launch_antivirus", { product: name });
@@ -903,6 +904,39 @@ function App() {
     return patterns.some((p) => norm.includes(p.toLowerCase()));
   }
 
+  const intentToCategory = (intent: string | undefined): Category => {
+    switch (intent) {
+      case "PRINTERS":
+        return "Printers";
+      case "SAGE300":
+        return "Sage 300";
+      case "OUTLOOK_EMAIL":
+      case "OFFICE365":
+        return "Email";
+      default:
+        return "General";
+    }
+  };
+
+  const pushAiMessage = (
+    question: string,
+    answer: string,
+    action?: { actionLabel: string; actionTarget: "troubleshoot" | "ticket" },
+    ticketData?: { subject?: string; category?: string; description?: string }
+  ) => {
+    if (ticketData) {
+      setLastTicketDraft((prev) => ({
+        subject: ticketData.subject || prev?.subject || "AI Assistant Summary",
+        category: (ticketData.category as Category) || prev?.category || "General",
+        description: ticketData.description || prev?.description || "",
+        userEmail: prev?.userEmail || userEmail,
+        urgency: prev?.urgency || urgency,
+      }));
+    }
+    const baseId = Date.now();
+    setAiHistory((prev) => [...prev, { id: baseId, question, answer, ...action }].slice(-50));
+  };
+
   async function handleAskAi() {
     const question = aiQuestion.trim();
     if (!question) return;
@@ -962,6 +996,17 @@ function App() {
       aiFlow,
       deviceStatus
     );
+    if (response.ticketData) {
+      const draft = {
+        subject: response.ticketData?.subject || "AI Assistant Summary",
+        category: intentToCategory(response.ticketData?.category as string | undefined),
+        description: response.ticketData?.description || "",
+        userEmail: userEmail,
+        urgency: urgency,
+      };
+      setLastTicketDraft(draft);
+      setAiTicketDraft(draft);
+    }
     if (driverResultOverride) {
       const count = driverResultOverride.outdated_count;
       const hasNamed = driverResultOverride.sample.some(
@@ -972,16 +1017,21 @@ function App() {
         response.followUp = undefined;
       }
     }
-    const baseId = Date.now();
-    const action =
-      response.actionLabel && response.actionTarget
-        ? { actionLabel: response.actionLabel, actionTarget: response.actionTarget }
-        : wantsNetworkCheck || wantsVpnCheck || wantsDriverCheck
-        ? { actionLabel: "View details in Troubleshoot", actionTarget: "troubleshoot" as const }
-        : undefined;
-    setAiHistory((prev) =>
-      [...prev, { id: baseId, question, answer: response.answer, ...action }].slice(-50)
-    );
+    const actionForAnswer =
+      response.followUp
+        ? undefined
+        : (response.actionLabel && response.actionTarget
+            ? { actionLabel: response.actionLabel, actionTarget: response.actionTarget }
+            : null) ||
+          (response.ticketData
+            ? { actionLabel: "Open ticket form", actionTarget: "ticket" as const }
+            : null) ||
+          (wantsNetworkCheck || wantsVpnCheck || wantsDriverCheck
+            ? { actionLabel: "View details in Troubleshoot", actionTarget: "troubleshoot" as const }
+            : null) ||
+          undefined;
+
+    pushAiMessage(question, response.answer, actionForAnswer, response.ticketData);
 
     if (response.flow) {
       setAiFlow(response.flow);
@@ -999,9 +1049,15 @@ function App() {
 
       const timerId = window.setTimeout(() => {
         setAiAnalyzing(false);
-        setAiHistory((prev) =>
-          [...prev, { id: Date.now(), question: "", answer: response.followUp! }].slice(-50)
-        );
+        const followAction =
+          (response.actionLabel && response.actionTarget
+            ? { actionLabel: response.actionLabel, actionTarget: response.actionTarget }
+          : null) ||
+          (response.ticketData
+            ? { actionLabel: "Open ticket form", actionTarget: "ticket" as const }
+            : null) ||
+          undefined;
+        pushAiMessage("", response.followUp!, followAction, response.ticketData);
       }, delay);
 
       setAiFollowUpTimer(timerId);
@@ -1034,6 +1090,7 @@ function App() {
     setAiHistory([]);
     setAiQuestion("");
     setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined });
+    setAiTicketFormOpen(false);
   }
 
   async function handlePingTest(): Promise<PingResult | null> {
@@ -1194,9 +1251,15 @@ function App() {
   };
 
   // --- Form submission -----------------------------------------------------
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!subject.trim() || !description.trim()) return;
+  async function handleSubmit(e?: FormEvent, draft?: { subject: string; description: string; category: Category; userEmail: string; urgency: Urgency }) {
+    if (e) e.preventDefault();
+    const effectiveSubject = draft?.subject ?? subject;
+    const effectiveDescription = draft?.description ?? description;
+    const effectiveCategory = draft?.category ?? category;
+    const effectiveUserEmail = draft?.userEmail ?? userEmail;
+    const effectiveUrgency = draft?.urgency ?? urgency;
+
+    if (!effectiveSubject.trim() || !effectiveDescription.trim()) return;
 
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setStatus("error");
@@ -1235,11 +1298,11 @@ function App() {
       }
 
       const payload = {
-        subject,
-        description,
-        userEmail: userEmail || null,
-        urgency,
-        category,
+        subject: effectiveSubject,
+        description: effectiveDescription,
+        userEmail: effectiveUserEmail || null,
+        urgency: effectiveUrgency,
+        category: effectiveCategory,
         printerInfo: categoryDetail,
         screenshots,
         screenshot: screenshots[0] ?? null,
@@ -1316,12 +1379,14 @@ function App() {
         }
       }
 
-      setSubject("");
-      setDescription("");
+      if (!draft) {
+        setSubject("");
+        setDescription("");
+        setUrgency("Normal");
+        setCategory("General");
+      }
       setScreenshots([]);
       setStatus("success");
-      setUrgency("Normal");
-      setCategory("General");
     } catch (err) {
       console.error("Failed to send ticket:", err);
 
@@ -1397,7 +1462,14 @@ function App() {
             <span className="icon">⚙️</span>
             <span>System</span>
           </button>
-          <button type="button" className="side-button exit" onClick={handleExitApp}>
+          <button
+            type="button"
+            className="side-button exit"
+            onClick={() => {
+              const win = getCurrentWindow();
+              win.hide().catch((err) => console.error("Failed to hide window:", err));
+            }}
+          >
             <span className="icon">⏻</span>
             <span>Exit</span>
           </button>
@@ -1726,7 +1798,13 @@ function App() {
               history={aiHistory}
               analyzing={aiAnalyzing}
               onOpenTroubleshoot={() => handleNavClick("troubleshoot")}
-              onOpenTicket={() => handleNavClick("home")}
+              onOpenTicket={() => {
+                if (lastTicketDraft) {
+                  setAiTicketDraft(lastTicketDraft);
+                }
+                setAiTicketFormOpen(true);
+                pushAiMessage("", "Ticket form opened. Review the details and press Send to IT.", undefined);
+              }}
             />
           </main>
         ) : activeNav === "history" ? (
@@ -1746,6 +1824,122 @@ function App() {
               reloading={systemMetricsLoading}
             />
           </main>
+        )}
+
+        {aiTicketFormOpen && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.55)",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              zIndex: 2000,
+            }}
+          >
+            <div
+              className="troubleshoot-card"
+              style={{
+                width: "520px",
+                maxWidth: "90vw",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+              }}
+            >
+              <h3 style={{ marginBottom: 4 }}>Submit this as a ticket</h3>
+              <p style={{ marginTop: 0, marginBottom: 16, color: "var(--text-muted)" }}>
+                Review and edit before sending. Subject and description are required.
+              </p>
+              <div className="form-row two-col">
+                <label className="field">
+                  <span>Subject</span>
+                  <input
+                    type="text"
+                    value={aiTicketDraft.subject}
+                    onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, subject: e.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>Category</span>
+                  <div className="select-wrapper">
+                    <select
+                      value={aiTicketDraft.category}
+                      onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, category: e.target.value as Category }))}
+                    >
+                      <option value="General">General</option>
+                      <option value="Printers">Printers</option>
+                      <option value="Sage 300">Sage 300</option>
+                      <option value="Adobe">Adobe</option>
+                      <option value="Office 365">Office 365</option>
+                      <option value="Email">Email</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                </label>
+              </div>
+              <label className="field">
+                <span>Description</span>
+                <textarea
+                  rows={4}
+                  value={aiTicketDraft.description}
+                  onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, description: e.target.value }))}
+                />
+              </label>
+              <div className="form-row two-col">
+                <label className="field">
+                  <span>Your email (optional)</span>
+                  <input
+                    type="email"
+                    value={aiTicketDraft.userEmail}
+                    onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, userEmail: e.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>Urgency</span>
+                  <div className="select-wrapper">
+                    <select
+                      value={aiTicketDraft.urgency}
+                      onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, urgency: e.target.value as Urgency }))}
+                    >
+                      <option value="Low">Low</option>
+                      <option value="Normal">Normal</option>
+                      <option value="High">High</option>
+                    </select>
+                  </div>
+                </label>
+              </div>
+                <div className="submit-row" style={{ justifyContent: "space-between" }}>
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    style={{ background: "#c53030", borderColor: "#c53030", color: "#fff" }}
+                    onClick={() => {
+                      setAiTicketFormOpen(false);
+                    }}
+                  >
+                    Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={async () => {
+                    if (!aiTicketDraft.subject.trim() || !aiTicketDraft.description.trim()) {
+                      pushAiMessage("", "Subject and description are required to submit a ticket.", undefined);
+                      return;
+                    }
+                    await handleSubmit(undefined, aiTicketDraft);
+                    setAiTicketFormOpen(false);
+                    setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined, slots: {}, ticketDraft: undefined });
+                    pushAiMessage("", "Ticket submitted to IT.", undefined);
+                  }}
+                >
+                  Send to IT
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {updateAvailable && (
