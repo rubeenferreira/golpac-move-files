@@ -1,7 +1,9 @@
 import type { SystemInfo } from "../types";
 
 const INSTALL_ID_KEY = "golpac-install-id";
-const INSTALL_ENDPOINT = "https://golpac-support-vcercel.vercel.app/";
+// Point directly to the install API route
+// Use the main Vercel domain for the install API
+const INSTALL_ENDPOINT = "https://golpac-support-vcercel.vercel.app/api/install";
 const INSTALL_TOKEN = "dxTLRLGrGg3Jh2ZujTLaavsg";
 
 export async function registerInstall(getSystemInfo: () => Promise<SystemInfo>, appVersion: string) {
@@ -15,7 +17,7 @@ export async function registerInstall(getSystemInfo: () => Promise<SystemInfo>, 
 
   try {
     const info = await getSystemInfo();
-    await fetch(INSTALL_ENDPOINT, {
+    const res = await fetch(INSTALL_ENDPOINT, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -31,6 +33,10 @@ export async function registerInstall(getSystemInfo: () => Promise<SystemInfo>, 
         timestamp: new Date().toISOString(),
       }),
     });
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("Install registration failed:", res.status, res.statusText, text);
+    }
   } catch (err) {
     console.error("Install registration failed:", err);
   }
