@@ -311,7 +311,7 @@ fn get_driver_status() -> Result<DriverStatus, String> {
           $cutoff = (Get-Date).AddYears(-3)
           Get-WmiObject Win32_PnPSignedDriver |
             Where-Object { $_.DriverDate -lt $cutoff } |
-            Select-Object DeviceName, DriverVersion, DriverDate |
+            Select-Object DeviceName, Description, DriverProviderName, DriverVersion, DriverDate |
             ConvertTo-Json -Depth 2
         "#;
 
@@ -333,9 +333,13 @@ fn get_driver_status() -> Result<DriverStatus, String> {
             match val {
                 serde_json::Value::Array(arr) => {
                     for item in arr.iter().take(5) {
-                        let device = item
-                            .get("DeviceName")
-                            .and_then(|v| v.as_str())
+                        let device_name = item.get("DeviceName").and_then(|v| v.as_str());
+                        let description = item.get("Description").and_then(|v| v.as_str());
+                        let provider = item.get("DriverProviderName").and_then(|v| v.as_str());
+                        let device = device_name
+                            .filter(|s| !s.is_empty() && *s != "Unknown")
+                            .or(description.filter(|s| !s.is_empty()))
+                            .or(provider.filter(|s| !s.is_empty()))
                             .unwrap_or("Unknown")
                             .to_string();
                         let version = item
@@ -356,9 +360,13 @@ fn get_driver_status() -> Result<DriverStatus, String> {
                     }
                 }
                 serde_json::Value::Object(obj) => {
-                    let device = obj
-                        .get("DeviceName")
-                        .and_then(|v| v.as_str())
+                    let device_name = obj.get("DeviceName").and_then(|v| v.as_str());
+                    let description = obj.get("Description").and_then(|v| v.as_str());
+                    let provider = obj.get("DriverProviderName").and_then(|v| v.as_str());
+                    let device = device_name
+                        .filter(|s| !s.is_empty() && *s != "Unknown")
+                        .or(description.filter(|s| !s.is_empty()))
+                        .or(provider.filter(|s| !s.is_empty()))
                         .unwrap_or("Unknown")
                         .to_string();
                     let version = obj
