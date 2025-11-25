@@ -356,6 +356,13 @@ function App() {
       .catch((err) => console.error("Failed to preload system info:", err));
   }, []);
 
+  // Register install with backend (Vercel) once app version is known
+  useEffect(() => {
+    if (!appVersion) return;
+    registerInstall(() => loadSystemInfo(), appVersion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appVersion]);
+
   useEffect(() => {
     registerInstall(() => loadSystemInfo(), appVersion);
   }, [appVersion]);
