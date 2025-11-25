@@ -1,7 +1,7 @@
 import type { SystemInfo } from "../types";
 
 const INSTALL_ID_KEY = "golpac-install-id";
-const INSTALL_ENDPOINT = "https://golpac-support-vcercel-n4etcl9uo.vercel.app/api/install";
+const INSTALL_ENDPOINT = "https://golpac-support-vcercel.vercel.app/";
 const INSTALL_TOKEN = "dxTLRLGrGg3Jh2ZujTLaavsg";
 
 export async function registerInstall(getSystemInfo: () => Promise<SystemInfo>, appVersion: string) {
