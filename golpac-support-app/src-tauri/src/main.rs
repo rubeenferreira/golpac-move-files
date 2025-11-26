@@ -21,8 +21,6 @@ use serde_json::Value;
 #[cfg(target_os = "windows")]
 use std::collections::HashMap;
 #[cfg(target_os = "windows")]
-use std::collections::HashMap;
-#[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::{env, fs, os::windows::process::CommandExt, path::PathBuf, time::Instant};
@@ -1647,7 +1645,6 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "virtualbox" => "VirtualBox".to_string(),
         "anydesk" => "AnyDesk".to_string(),
         "teamviewer" => "TeamViewer".to_string(),
-        "slack" => "Slack".to_string(),
         "discord" => "Discord".to_string(),
         other => {
             if other.len() <= 2 {
