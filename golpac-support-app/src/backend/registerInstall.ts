@@ -22,6 +22,74 @@ let lastAppUsage: AppUsageStat[] = [];
 let lastWebUsage: WebUsageStat[] = [];
 let lastSystemInfo: Partial<SystemInfo> | null = null;
 
+type DailyCache = {
+  date: string;
+  apps: Record<string, number>;
+  webs: Record<string, number>;
+};
+
+function loadDailyCache(currentDate: string): DailyCache {
+  if (typeof window === "undefined") return { date: currentDate, apps: {}, webs: {} };
+  try {
+    const raw = window.localStorage.getItem("golpac-usage-daily");
+    if (!raw) return { date: currentDate, apps: {}, webs: {} };
+    const parsed = JSON.parse(raw) as DailyCache;
+    if (!parsed || parsed.date !== currentDate) return { date: currentDate, apps: {}, webs: {} };
+    return parsed;
+  } catch {
+    return { date: currentDate, apps: {}, webs: {} };
+  }
+}
+
+function saveDailyCache(cache: DailyCache) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem("golpac-usage-daily", JSON.stringify(cache));
+  } catch {
+    // ignore
+  }
+}
+
+function aggregateDailyUsage(appUsage: AppUsageStat[], webUsage: WebUsageStat[]) {
+  const currentDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const cache = loadDailyCache(currentDate);
+
+  appUsage.forEach((app) => {
+    const key = app.name || "Unknown";
+    cache.apps[key] = (cache.apps[key] || 0) + Math.max(0, app.usageMinutes || 0);
+  });
+
+  webUsage.forEach((site) => {
+    const key = site.domain || "unknown";
+    cache.webs[key] = (cache.webs[key] || 0) + Math.max(0, site.visits || 0);
+  });
+
+  const appsAggregated: AppUsageStat[] = Object.entries(cache.apps)
+    .map(([name, minutes], idx) => ({
+      name,
+      usageMinutes: minutes,
+      percentage: 0,
+      color: lastAppUsage[idx % lastAppUsage.length]?.color || "#0ea5e9",
+    }))
+    .sort((a, b) => b.usageMinutes - a.usageMinutes);
+
+  const totalMinutes = appsAggregated.reduce((sum, a) => sum + a.usageMinutes, 0) || 1;
+  appsAggregated.forEach((a) => {
+    a.percentage = Math.round(((a.usageMinutes / totalMinutes) * 100) * 10) / 10;
+  });
+
+  const websAggregated: WebUsageStat[] = Object.entries(cache.webs)
+    .map(([domain, visits]) => ({
+      domain,
+      visits,
+      category: "Browsing",
+    }))
+    .sort((a, b) => b.visits - a.visits);
+
+  saveDailyCache(cache);
+  return { appsAggregated, websAggregated };
+}
+
 async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage: WebUsageStat[] }> {
   try {
     const result = (await invoke("get_usage_snapshot")) as {
@@ -35,10 +103,13 @@ async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage:
     if (appUsage.length > 0) lastAppUsage = appUsage;
     if (webUsage.length > 0) lastWebUsage = webUsage;
 
-    return { appUsage, webUsage };
+    const { appsAggregated, websAggregated } = aggregateDailyUsage(appUsage, webUsage);
+
+    return { appUsage: appsAggregated, webUsage: websAggregated };
   } catch (err) {
     console.warn("Usage snapshot unavailable:", err);
-    return { appUsage: lastAppUsage, webUsage: lastWebUsage };
+    const { appsAggregated, websAggregated } = aggregateDailyUsage(lastAppUsage, lastWebUsage);
+    return { appUsage: appsAggregated, webUsage: websAggregated };
   }
 }
 

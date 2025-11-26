@@ -1533,7 +1533,7 @@ fn normalize_process_name(raw: &str) -> Option<String> {
     if lower.is_empty() {
         return None;
     }
-    let ignored = [
+    let ignored_exact = [
         "system",
         "idle",
         "svchost",
@@ -1553,7 +1553,16 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "aackingstondramhal_x86",
         "aac3572mbhal_x86",
     ];
-    if ignored.contains(&lower.as_str()) {
+    if ignored_exact.contains(&lower.as_str()) {
+        return None;
+    }
+
+    // Skip obvious background services
+    let looks_like_service = lower.contains("service")
+        || lower.ends_with("svc")
+        || lower.contains("host")
+        || lower.contains("helper");
+    if looks_like_service {
         return None;
     }
 
@@ -1574,6 +1583,30 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "remoting_desktop" => "Remote Desktop".to_string(),
         "remoting_host" => "Remote Desktop Host".to_string(),
         "msmpeng" => "Windows Defender".to_string(),
+        "steam" => "Steam".to_string(),
+        "acad" | "autocad" => "AutoCAD".to_string(),
+        "revit" => "Revit".to_string(),
+        "3dsmax" => "3ds Max".to_string(),
+        "maya" => "Maya".to_string(),
+        "blender" => "Blender".to_string(),
+        "photoshop" | "photoshopbeta" => "Photoshop".to_string(),
+        "illustrator" => "Illustrator".to_string(),
+        "indesign" => "InDesign".to_string(),
+        "premiere" | "premierepro" => "Premiere Pro".to_string(),
+        "afterfx" | "aftereffects" => "After Effects".to_string(),
+        "lightroom" => "Lightroom".to_string(),
+        "code" => "VS Code".to_string(),
+        "devenv" => "Visual Studio".to_string(),
+        "idea64" | "pycharm64" | "clion64" | "webstorm64" | "rider64" => {
+            "JetBrains IDE".to_string()
+        }
+        "androidstudio" => "Android Studio".to_string(),
+        "vmware" | "vmware-hostd" | "vmware-vmx" => "VMware".to_string(),
+        "virtualbox" => "VirtualBox".to_string(),
+        "anydesk" => "AnyDesk".to_string(),
+        "teamviewer" => "TeamViewer".to_string(),
+        "slack" => "Slack".to_string(),
+        "discord" => "Discord".to_string(),
         other => {
             if other.len() <= 2 {
                 return None;

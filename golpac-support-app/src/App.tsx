@@ -378,7 +378,7 @@ function App() {
     if (!appVersion) return;
     const runHeartbeat = () => sendInstallHeartbeat(appVersion);
     runHeartbeat();
-    const interval = window.setInterval(runHeartbeat, 45 * 1000);
+    const interval = window.setInterval(runHeartbeat, 5 * 1000);
     return () => window.clearInterval(interval);
   }, [appVersion]);
 
