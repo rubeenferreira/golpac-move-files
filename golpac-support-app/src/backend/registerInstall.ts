@@ -20,6 +20,7 @@ const INSTALL_TOKEN = "dxTLRLGrGg3Jh2ZujTLaavsg";
 
 let lastAppUsage: AppUsageStat[] = [];
 let lastWebUsage: WebUsageStat[] = [];
+let lastSystemInfo: Partial<SystemInfo> | null = null;
 
 async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage: WebUsageStat[] }> {
   try {
@@ -38,6 +39,26 @@ async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage:
   } catch (err) {
     console.warn("Usage snapshot unavailable:", err);
     return { appUsage: lastAppUsage, webUsage: lastWebUsage };
+  }
+}
+
+async function safeSystemInfo(getSystemInfo: () => Promise<SystemInfo>): Promise<SystemInfo> {
+  try {
+    const info = await getSystemInfo();
+    lastSystemInfo = info;
+    return info;
+  } catch (err) {
+    console.warn("System info unavailable:", err);
+    // fall back to last known or minimal defaults
+    return {
+      hostname: lastSystemInfo?.hostname || "Unknown",
+      username: lastSystemInfo?.username || "Unknown",
+      os_version: lastSystemInfo?.os_version || lastSystemInfo?.osVersion || "Unknown OS",
+      ipv4: lastSystemInfo?.ipv4 || "0.0.0.0",
+      domain: typeof lastSystemInfo?.domain !== "undefined" ? lastSystemInfo?.domain : null,
+      // keep optional field for osVersion shape
+      osVersion: lastSystemInfo?.osVersion,
+    };
   }
 }
 
@@ -84,12 +105,12 @@ export async function registerInstall(getSystemInfo: () => Promise<SystemInfo>, 
   const installId = ensureInstallId();
   if (!installId) return;
   try {
-    const info = await getSystemInfo();
+    const info = await safeSystemInfo(getSystemInfo);
     const { appUsage, webUsage } = await getUsageSnapshot();
     const snapshotDate = new Date().toISOString();
     await postInstall({
       installId,
-      hostname: info.hostname,
+      hostname: info.hostname || "Unknown",
       osVersion: info.osVersion || (info as any).os_version || "Unknown",
       ipv4: info.ipv4,
       domain: info.domain,
@@ -110,16 +131,21 @@ export async function sendInstallHeartbeat(appVersion: string) {
   if (!installId) return;
   try {
     const { appUsage, webUsage } = await getUsageSnapshot();
+    const info = lastSystemInfo;
     const snapshotDate = new Date().toISOString();
-    await postInstall({
-      installId,
-      appVersion: appVersion || "unknown",
-      timestamp: snapshotDate,
-      heartbeat: true,
-      appUsage,
-      webUsage,
-      snapshotDate,
-    });
+    await postInstall(
+      {
+        installId,
+        hostname: info?.hostname || "Unknown",
+        appVersion: appVersion || "unknown",
+        timestamp: snapshotDate,
+        heartbeat: true,
+        appUsage,
+        webUsage,
+        snapshotDate,
+      },
+      1
+    );
   } catch (err) {
     console.error("Heartbeat failed:", err);
   }
