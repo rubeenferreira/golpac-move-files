@@ -1553,20 +1553,20 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         return None;
     }
 
-    let friendly = match lower.as_str() {
-        "chrome" => "Chrome",
-        "msedge" => "Edge",
-        "brave" => "Brave",
-        "firefox" => "Firefox",
-        "outlook" => "Outlook",
-        "teams" => "Microsoft Teams",
-        "excel" => "Excel",
-        "winword" | "word" => "Word",
-        "powerpnt" => "PowerPoint",
-        "slack" => "Slack",
-        "zoom" => "Zoom",
-        "onedrive" => "OneDrive",
-        "spotify" => "Spotify",
+    let friendly: String = match lower.as_str() {
+        "chrome" => "Chrome".to_string(),
+        "msedge" => "Edge".to_string(),
+        "brave" => "Brave".to_string(),
+        "firefox" => "Firefox".to_string(),
+        "outlook" => "Outlook".to_string(),
+        "teams" => "Microsoft Teams".to_string(),
+        "excel" => "Excel".to_string(),
+        "winword" | "word" => "Word".to_string(),
+        "powerpnt" => "PowerPoint".to_string(),
+        "slack" => "Slack".to_string(),
+        "zoom" => "Zoom".to_string(),
+        "onedrive" => "OneDrive".to_string(),
+        "spotify" => "Spotify".to_string(),
         other => {
             if other.len() <= 2 {
                 return None;
@@ -1580,7 +1580,7 @@ fn normalize_process_name(raw: &str) -> Option<String> {
             }
         }
     };
-    Some(friendly.to_string())
+    Some(friendly)
 }
 
 #[cfg(target_os = "windows")]
