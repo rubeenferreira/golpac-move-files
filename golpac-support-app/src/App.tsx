@@ -242,6 +242,13 @@ function App() {
     SAGE_ISSUE_OPTIONS.find((opt) => opt.value === selectedSageIssue) ||
     SAGE_ISSUE_OPTIONS[0];
 
+  useEffect(() => {
+    const win = getCurrentWindow();
+    win.setSkipTaskbar(false).catch(() => {
+      /* ignore */
+    });
+  }, []);
+
   // --- App version ---------------------------------------------------------
   useEffect(() => {
     const stored = localStorage.getItem("golpac-app-version");
@@ -1495,7 +1502,10 @@ function App() {
             className="side-button exit"
             onClick={() => {
               const win = getCurrentWindow();
-              win.hide().catch((err) => console.error("Failed to hide window:", err));
+              win
+                .hide()
+                .then(() => win.setSkipTaskbar(true))
+                .catch((err) => console.error("Failed to hide window:", err));
             }}
           >
             <span className="icon">⏻</span>

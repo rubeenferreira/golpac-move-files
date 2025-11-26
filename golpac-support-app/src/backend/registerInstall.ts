@@ -21,6 +21,8 @@ const INSTALL_TOKEN = "dxTLRLGrGg3Jh2ZujTLaavsg";
 let lastAppUsage: AppUsageStat[] = [];
 let lastWebUsage: WebUsageStat[] = [];
 let lastSystemInfo: Partial<SystemInfo> | null = null;
+let lastWebTotals: Record<string, number> = {};
+let lastAppTotals: Record<string, number> = {};
 
 type DailyCache = {
   date: string;
@@ -54,14 +56,39 @@ function aggregateDailyUsage(appUsage: AppUsageStat[], webUsage: WebUsageStat[])
   const currentDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const cache = loadDailyCache(currentDate);
 
+  const ignoredApps = new Set([
+    "adobecollabsync",
+    "armourysocketserver",
+    "acpowernotification",
+    "appactions",
+    "aackingstondramhal_x86",
+    "aac3572mbhal_x86",
+    "acrocef",
+  ]);
+
+  // Remove stale ignored entries
+  Object.keys(cache.apps).forEach((key) => {
+    if (ignoredApps.has(key.toLowerCase())) {
+      delete cache.apps[key];
+      delete lastAppTotals[key];
+    }
+  });
+
   appUsage.forEach((app) => {
     const key = app.name || "Unknown";
-    cache.apps[key] = (cache.apps[key] || 0) + Math.max(0, app.usageMinutes || 0);
+    if (ignoredApps.has(key.toLowerCase())) return;
+    const prev = lastAppTotals[key] || 0;
+    const delta = Math.max(0, (app.usageMinutes || 0) - prev);
+    lastAppTotals[key] = app.usageMinutes || prev;
+    cache.apps[key] = (cache.apps[key] || 0) + delta;
   });
 
   webUsage.forEach((site) => {
     const key = site.domain || "unknown";
-    cache.webs[key] = (cache.webs[key] || 0) + Math.max(0, site.visits || 0);
+    const prev = lastWebTotals[key] || 0;
+    const delta = Math.max(0, (site.visits || 0) - prev);
+    lastWebTotals[key] = site.visits || prev;
+    cache.webs[key] = (cache.webs[key] || 0) + delta;
   });
 
   const appsAggregated: AppUsageStat[] = Object.entries(cache.apps)

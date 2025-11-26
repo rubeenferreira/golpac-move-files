@@ -1591,22 +1591,6 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         return None;
     }
 
-    // Skip obvious background services
-    let looks_like_service = lower.contains("service")
-        || lower.ends_with("svc")
-        || lower.contains("host")
-        || lower.contains("helper")
-        || lower.contains("notification")
-        || lower.contains("socket")
-        || lower.contains("server")
-        || lower.contains("hal")
-        || lower.contains("asus")
-        || lower.contains("armoury")
-        || (lower.contains("hp") && lower.contains("support"));
-    if looks_like_service {
-        return None;
-    }
-
     let friendly: String = match lower.as_str() {
         "chrome" => "Chrome".to_string(),
         "msedge" => "Edge".to_string(),
