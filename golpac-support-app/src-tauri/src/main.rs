@@ -81,13 +81,6 @@ struct SystemInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct AppUsageEntry {
-    name: String,
-    #[serde(rename = "usageMinutes")]
-    usage_minutes: f64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
 struct ProcessCpuSample {
     #[serde(rename = "name")]
     process_name: String,
