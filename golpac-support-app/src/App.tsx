@@ -244,12 +244,20 @@ function App() {
 
   // --- App version ---------------------------------------------------------
   useEffect(() => {
+    const stored = localStorage.getItem("golpac-app-version");
+    if (stored) {
+      setAppVersion(stored);
+    }
     getVersion()
-      .then((v) => setAppVersion(v))
+      .then((v) => {
+        setAppVersion(v);
+        localStorage.setItem("golpac-app-version", v);
+      })
       .catch((err) => {
         console.error("Failed to get app version:", err);
-        // Ensure downstream flows (install/heartbeat) still fire
-        setAppVersion("unknown");
+        if (!stored) {
+          setAppVersion("unknown");
+        }
       });
 
     // Weekly update check on startup

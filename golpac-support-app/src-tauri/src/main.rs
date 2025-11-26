@@ -1707,6 +1707,11 @@ fn build_web_usage() -> Vec<WebUsageEntry> {
         tally_history_file(&brave, &mut counts);
     }
 
+    // Merge in DNS cache so visits reflect current browsing even if history isn't flushed yet
+    for entry in build_dns_web_usage() {
+        *counts.entry(entry.domain).or_insert(0) += entry.visits;
+    }
+
     let mut items: Vec<(String, i64)> = counts.into_iter().collect();
     items.sort_by(|a, b| b.1.cmp(&a.1));
     items.truncate(8);
