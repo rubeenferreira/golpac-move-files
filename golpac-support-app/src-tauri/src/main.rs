@@ -1632,14 +1632,14 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "discord" => "Discord".to_string(),
         other => {
             if other.len() <= 2 {
-                return None;
+                return Some(raw.to_string());
             }
             let mut chars = other.chars();
             if let Some(first) = chars.next() {
                 let title = first.to_uppercase().collect::<String>() + chars.as_str();
-                title
+                Some(title)
             } else {
-                return None;
+                Some(raw.to_string())
             }
         }
     };
@@ -1681,6 +1681,13 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
     if let Ok(fg_name) = get_foreground_process() {
         if let Some(name) = normalize_process_name(&fg_name) {
             *by_name.entry(name).or_insert(0.0) += 15.0;
+        }
+    }
+
+    // Ensure visible list includes running processes even with 0 usage
+    for pname in list_running_process_names() {
+        if let Some(name) = normalize_process_name(&pname) {
+            by_name.entry(name).or_insert(0.0);
         }
     }
 
@@ -1732,6 +1739,17 @@ $pid = 0
 if ($pid -ne 0) { (Get-Process -Id $pid).ProcessName }
     "#;
     run_powershell_text(script)
+}
+
+#[cfg(target_os = "windows")]
+fn list_running_process_names() -> Vec<String> {
+    let script = r#"
+        Get-Process | Select-Object -ExpandProperty ProcessName | Sort-Object -Unique | ConvertTo-Json
+    "#;
+    run_powershell_json(script)
+        .ok()
+        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(target_os = "windows")]
