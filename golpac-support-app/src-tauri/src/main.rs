@@ -1552,6 +1552,10 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "dwm",
         "aackingstondramhal_x86",
         "aac3572mbhal_x86",
+        "adobecollabsync",
+        "armourysocketserver",
+        "acpowernotification",
+        "appactions",
     ];
     if ignored_exact.contains(&lower.as_str()) {
         return None;
@@ -1561,7 +1565,14 @@ fn normalize_process_name(raw: &str) -> Option<String> {
     let looks_like_service = lower.contains("service")
         || lower.ends_with("svc")
         || lower.contains("host")
-        || lower.contains("helper");
+        || lower.contains("helper")
+        || lower.contains("notification")
+        || lower.contains("socket")
+        || lower.contains("server")
+        || lower.contains("hal")
+        || lower.contains("asus")
+        || lower.contains("armoury")
+        || (lower.contains("hp") && lower.contains("support"));
     if looks_like_service {
         return None;
     }
@@ -1584,6 +1595,7 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "remoting_host" => "Remote Desktop Host".to_string(),
         "msmpeng" => "Windows Defender".to_string(),
         "steam" => "Steam".to_string(),
+        "smartpss" | "smartpssclient" => "SmartPSS".to_string(),
         "acad" | "autocad" => "AutoCAD".to_string(),
         "revit" => "Revit".to_string(),
         "3dsmax" => "3ds Max".to_string(),
@@ -1670,14 +1682,17 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
     items
         .into_iter()
         .enumerate()
-        .map(|(idx, (name, cpu_seconds))| {
+        .filter_map(|(idx, (name, cpu_seconds))| {
+            if cpu_seconds <= 0.05 {
+                return None;
+            }
             let minutes = cpu_seconds / 60.0;
-            AppUsageWithColor {
+            Some(AppUsageWithColor {
                 name,
                 usage_minutes: minutes,
                 percentage: ((cpu_seconds / total.max(0.1)) * 100.0 * 10.0).round() / 10.0,
                 color: palette[idx % palette.len()].to_string(),
-            }
+            })
         })
         .collect()
 }
