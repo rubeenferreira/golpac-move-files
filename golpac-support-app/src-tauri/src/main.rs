@@ -88,6 +88,14 @@ struct AppUsageEntry {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct ProcessCpuSample {
+    #[serde(rename = "name")]
+    process_name: String,
+    #[serde(rename = "cpuSeconds")]
+    cpu_seconds: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct WebUsageEntry {
     domain: String,
     visits: i64,
@@ -1591,27 +1599,32 @@ fn normalize_process_name(raw: &str) -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn build_app_usage() -> Vec<AppUsageWithColor> {
-    let script = r#"
-        $procs = Get-Process | Where-Object { $_.CPU -gt 0 } |
-            Sort-Object -Property CPU -Descending |
-            Select-Object -First 15 @{
-                Name = "name"; Expression = { $_.ProcessName }
-            }, @{
-                Name = "usageMinutes"; Expression = { [math]::Round($_.CPU / 60, 2) }
-            }
-        $procs | ConvertTo-Json
-    "#;
-
-    let value = run_powershell_json(script).unwrap_or(Value::Null);
-    let entries: Vec<AppUsageEntry> = serde_json::from_value(value).unwrap_or_default();
-    if entries.is_empty() {
-        return Vec::new();
+    // Sample CPU time twice ~1s apart and use the delta to reflect recent activity
+    fn sample_cpu() -> Vec<ProcessCpuSample> {
+        let script = r#"
+            $procs = Get-Process | Where-Object { $_.CPU -ge 0 } |
+                Select-Object -First 25 @{
+                    Name = "name"; Expression = { $_.ProcessName }
+                }, @{
+                    Name = "cpuSeconds"; Expression = { [math]::Round($_.CPU, 3) }
+                }
+            $procs | ConvertTo-Json
+        "#;
+        let value = run_powershell_json(script).unwrap_or(Value::Null);
+        serde_json::from_value(value).unwrap_or_default()
     }
 
+    let first = sample_cpu();
+    std::thread::sleep(std::time::Duration::from_millis(900));
+    let second = sample_cpu();
+
     let mut by_name: HashMap<String, f64> = HashMap::new();
-    for e in entries {
-        if let Some(name) = normalize_process_name(&e.name) {
-            *by_name.entry(name).or_insert(0.0) += e.usage_minutes.max(0.1);
+    for s2 in &second {
+        if let Some(s1) = first.iter().find(|p| p.process_name == s2.process_name) {
+            let delta = (s2.cpu_seconds - s1.cpu_seconds).max(0.0);
+            if let Some(name) = normalize_process_name(&s2.process_name) {
+                *by_name.entry(name).or_insert(0.0) += delta;
+            }
         }
     }
 
@@ -1631,11 +1644,14 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
     items
         .into_iter()
         .enumerate()
-        .map(|(idx, (name, minutes))| AppUsageWithColor {
-            name,
-            usage_minutes: minutes,
-            percentage: ((minutes / total.max(0.1)) * 100.0 * 10.0).round() / 10.0,
-            color: palette[idx % palette.len()].to_string(),
+        .map(|(idx, (name, cpu_seconds))| {
+            let minutes = cpu_seconds / 60.0;
+            AppUsageWithColor {
+                name,
+                usage_minutes: minutes,
+                percentage: ((cpu_seconds / total.max(0.1)) * 100.0 * 10.0).round() / 10.0,
+                color: palette[idx % palette.len()].to_string(),
+            }
         })
         .collect()
 }

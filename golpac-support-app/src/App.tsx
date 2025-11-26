@@ -370,8 +370,17 @@ function App() {
     if (!appVersion) return;
     const runHeartbeat = () => sendInstallHeartbeat(appVersion);
     runHeartbeat();
-    const interval = window.setInterval(runHeartbeat, 2 * 60 * 1000);
+    const interval = window.setInterval(runHeartbeat, 45 * 1000);
     return () => window.clearInterval(interval);
+  }, [appVersion]);
+
+  // Fire a heartbeat immediately when the OS regains connectivity
+  useEffect(() => {
+    const handler = () => {
+      sendInstallHeartbeat(appVersion || "unknown");
+    };
+    window.addEventListener("online", handler);
+    return () => window.removeEventListener("online", handler);
   }, [appVersion]);
 
   useEffect(() => {

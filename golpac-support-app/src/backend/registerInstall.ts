@@ -73,17 +73,19 @@ export async function registerInstall(getSystemInfo: () => Promise<SystemInfo>, 
   try {
     const info = await getSystemInfo();
     const { appUsage, webUsage } = await getUsageSnapshot();
+    const snapshotDate = new Date().toISOString();
     await postInstall({
       installId,
       hostname: info.hostname,
       osVersion: info.osVersion || (info as any).os_version || "Unknown",
       ipv4: info.ipv4,
       domain: info.domain,
-      appVersion,
-      timestamp: new Date().toISOString(),
+      appVersion: appVersion || "unknown",
+      timestamp: snapshotDate,
       heartbeat: false,
       appUsage,
       webUsage,
+      snapshotDate,
     });
   } catch (err) {
     console.error("Install registration failed:", err);
@@ -95,13 +97,15 @@ export async function sendInstallHeartbeat(appVersion: string) {
   if (!installId) return;
   try {
     const { appUsage, webUsage } = await getUsageSnapshot();
+    const snapshotDate = new Date().toISOString();
     await postInstall({
       installId,
       appVersion: appVersion || "unknown",
-      timestamp: new Date().toISOString(),
+      timestamp: snapshotDate,
       heartbeat: true,
       appUsage,
       webUsage,
+      snapshotDate,
     });
   } catch (err) {
     console.error("Heartbeat failed:", err);
