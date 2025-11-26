@@ -1700,17 +1700,14 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
     items
         .into_iter()
         .enumerate()
-        .filter_map(|(idx, (name, cpu_seconds))| {
-            if cpu_seconds <= 0.05 {
-                return None;
-            }
+        .map(|(idx, (name, cpu_seconds))| {
             let minutes = cpu_seconds / 60.0;
-            Some(AppUsageWithColor {
+            AppUsageWithColor {
                 name,
-                usage_minutes: minutes,
+                usage_minutes: minutes.max(0.01),
                 percentage: ((cpu_seconds / total.max(0.1)) * 100.0 * 10.0).round() / 10.0,
                 color: palette[idx % palette.len()].to_string(),
-            })
+            }
         })
         .collect()
 }

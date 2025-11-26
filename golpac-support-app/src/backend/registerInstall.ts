@@ -57,7 +57,6 @@ function aggregateDailyUsage(appUsage: AppUsageStat[], webUsage: WebUsageStat[])
   const cache = loadDailyCache(currentDate);
 
   const ignoredApps = new Set([
-    "adobecollabsync",
     "armourysocketserver",
     "acpowernotification",
     "appactions",
@@ -86,7 +85,8 @@ function aggregateDailyUsage(appUsage: AppUsageStat[], webUsage: WebUsageStat[])
   webUsage.forEach((site) => {
     const key = site.domain || "unknown";
     const prev = lastWebTotals[key] || 0;
-    const delta = Math.max(0, (site.visits || 0) - prev);
+    // Treat incoming visits as cumulative; use delta if it increases, otherwise ignore
+    const delta = (site.visits || 0) > prev ? (site.visits || 0) - prev : 0;
     lastWebTotals[key] = site.visits || prev;
     cache.webs[key] = (cache.webs[key] || 0) + delta;
   });
