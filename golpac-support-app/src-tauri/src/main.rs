@@ -5,7 +5,6 @@ use chrono::Utc;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     process::Command,
     thread::sleep,
@@ -19,6 +18,8 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
 use arboard::Clipboard;
 #[cfg(target_os = "windows")]
 use serde_json::Value;
+#[cfg(target_os = "windows")]
+use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(target_os = "windows")]
@@ -81,14 +82,12 @@ struct SystemInfo {
     domain: Option<String>,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Serialize, Deserialize, Debug)]
 struct AppUsageEntry {
     name: String,
     usageMinutes: f64,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Serialize, Deserialize, Debug)]
 struct WebUsageEntry {
     domain: String,
@@ -96,14 +95,12 @@ struct WebUsageEntry {
     category: String,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Serialize)]
 struct UsageSnapshot {
     appUsage: Vec<AppUsageWithColor>,
     webUsage: Vec<WebUsageEntry>,
 }
 
-#[cfg(target_os = "windows")]
 #[derive(Serialize)]
 struct AppUsageWithColor {
     name: String,
@@ -1575,12 +1572,11 @@ fn normalize_process_name(raw: &str) -> Option<String> {
                 return None;
             }
             let mut chars = other.chars();
-            match chars.next() {
-                Some(first) => {
-                    let title = first.to_uppercase().collect::<String>() + chars.as_str();
-                    title.as_str()
-                }
-                None => return None,
+            if let Some(first) = chars.next() {
+                let title = first.to_uppercase().collect::<String>() + chars.as_str();
+                title
+            } else {
+                return None;
             }
         }
     };
@@ -1704,7 +1700,7 @@ fn build_web_usage() -> Vec<WebUsageEntry> {
 }
 
 #[cfg(target_os = "windows")]
-fn build_web_usage() -> Vec<WebUsageEntry> {
+fn build_dns_web_usage() -> Vec<WebUsageEntry> {
     let script = r#"
         $items = Get-DnsClientCache | Where-Object { $_.EntryType -eq 'Host' } |
             Select-Object -ExpandProperty Name |
