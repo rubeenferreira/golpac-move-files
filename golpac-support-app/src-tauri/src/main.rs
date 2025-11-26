@@ -1637,9 +1637,9 @@ fn normalize_process_name(raw: &str) -> Option<String> {
             let mut chars = other.chars();
             if let Some(first) = chars.next() {
                 let title = first.to_uppercase().collect::<String>() + chars.as_str();
-                Some(title)
+                title
             } else {
-                Some(raw.to_string())
+                raw.to_string()
             }
         }
     };
