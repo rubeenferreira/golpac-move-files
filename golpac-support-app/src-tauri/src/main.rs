@@ -85,7 +85,8 @@ struct SystemInfo {
 #[derive(Serialize, Deserialize, Debug)]
 struct AppUsageEntry {
     name: String,
-    usageMinutes: f64,
+    #[serde(rename = "usageMinutes")]
+    usage_minutes: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -97,14 +98,17 @@ struct WebUsageEntry {
 
 #[derive(Serialize)]
 struct UsageSnapshot {
-    appUsage: Vec<AppUsageWithColor>,
-    webUsage: Vec<WebUsageEntry>,
+    #[serde(rename = "appUsage")]
+    app_usage: Vec<AppUsageWithColor>,
+    #[serde(rename = "webUsage")]
+    web_usage: Vec<WebUsageEntry>,
 }
 
 #[derive(Serialize)]
 struct AppUsageWithColor {
     name: String,
-    usageMinutes: f64,
+    #[serde(rename = "usageMinutes")]
+    usage_minutes: f64,
     percentage: f64,
     color: String,
 }
@@ -1605,7 +1609,7 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
     let mut by_name: HashMap<String, f64> = HashMap::new();
     for e in entries {
         if let Some(name) = normalize_process_name(&e.name) {
-            *by_name.entry(name).or_insert(0.0) += e.usageMinutes.max(0.1);
+            *by_name.entry(name).or_insert(0.0) += e.usage_minutes.max(0.1);
         }
     }
 
@@ -1627,7 +1631,7 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
         .enumerate()
         .map(|(idx, (name, minutes))| AppUsageWithColor {
             name,
-            usageMinutes: minutes,
+            usage_minutes: minutes,
             percentage: ((minutes / total.max(0.1)) * 100.0 * 10.0).round() / 10.0,
             color: palette[idx % palette.len()].to_string(),
         })
@@ -1730,8 +1734,8 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
             web_usage = build_dns_web_usage();
         }
         return Ok(UsageSnapshot {
-            appUsage: app_usage,
-            webUsage: web_usage,
+            app_usage,
+            web_usage,
         });
     }
     #[cfg(not(target_os = "windows"))]

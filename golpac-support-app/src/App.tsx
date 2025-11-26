@@ -360,11 +360,6 @@ function App() {
   useEffect(() => {
     if (!appVersion) return;
     registerInstall(() => loadSystemInfo(), appVersion);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appVersion]);
-
-  useEffect(() => {
-    registerInstall(() => loadSystemInfo(), appVersion);
   }, [appVersion]);
 
   useEffect(() => {

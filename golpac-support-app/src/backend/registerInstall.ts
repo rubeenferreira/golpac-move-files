@@ -44,7 +44,7 @@ function ensureInstallId(): string | null {
   return installId;
 }
 
-async function postInstall(payload: Record<string, unknown>) {
+async function postInstall(payload: Record<string, unknown>, attempt = 1) {
   try {
     const res = await fetch(INSTALL_ENDPOINT, {
       method: "POST",
@@ -56,9 +56,13 @@ async function postInstall(payload: Record<string, unknown>) {
     });
     if (!res.ok) {
       const text = await res.text();
-      console.error("Install heartbeat failed:", res.status, res.statusText, text);
+      throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`);
     }
   } catch (err) {
+    if (attempt < 2) {
+      console.warn("Install post failed, retrying once...", err);
+      return postInstall(payload, attempt + 1);
+    }
     console.error("Install heartbeat failed:", err);
   }
 }
