@@ -21,6 +21,8 @@ use serde_json::Value;
 #[cfg(target_os = "windows")]
 use std::collections::HashMap;
 #[cfg(target_os = "windows")]
+use std::collections::HashMap;
+#[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::{env, fs, os::windows::process::CommandExt, path::PathBuf, time::Instant};
@@ -1524,6 +1526,23 @@ fn run_powershell_json(script: &str) -> Result<Value, String> {
 }
 
 #[cfg(target_os = "windows")]
+fn run_powershell_text(script: &str) -> Result<String, String> {
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "windows")]
 fn normalize_process_name(raw: &str) -> Option<String> {
     let lower = raw
         .trim_matches('"')
@@ -1532,6 +1551,19 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         .to_lowercase();
     if lower.is_empty() {
         return None;
+    }
+    if lower == "steam" || lower == "steamwebhelper" {
+        return Some("Steam".to_string());
+    }
+    if lower.contains("smartpss") {
+        return Some("SmartPSS".to_string());
+    }
+    // Allowlist some helper names before service filtering
+    if lower == "steam" || lower == "steamwebhelper" {
+        return Some("Steam".to_string());
+    }
+    if lower == "smartpss" || lower == "smartpssclient" {
+        return Some("SmartPSS".to_string());
     }
     let ignored_exact = [
         "system",
@@ -1594,8 +1626,6 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "remoting_desktop" => "Remote Desktop".to_string(),
         "remoting_host" => "Remote Desktop Host".to_string(),
         "msmpeng" => "Windows Defender".to_string(),
-        "steam" => "Steam".to_string(),
-        "smartpss" | "smartpssclient" => "SmartPSS".to_string(),
         "acad" | "autocad" => "AutoCAD".to_string(),
         "revit" => "Revit".to_string(),
         "3dsmax" => "3ds Max".to_string(),
@@ -1666,6 +1696,13 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
         }
     }
 
+    // Add foreground process sample (counts as ~15 seconds)
+    if let Ok(fg_name) = get_foreground_process() {
+        if let Some(name) = normalize_process_name(&fg_name) {
+            *by_name.entry(name).or_insert(0.0) += 15.0;
+        }
+    }
+
     if by_name.is_empty() {
         return Vec::new();
     }
@@ -1695,6 +1732,28 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
             })
         })
         .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn get_foreground_process() -> Result<String, String> {
+    let script = r#"
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+"@
+
+$hwnd = [Win32]::GetForegroundWindow()
+$pid = 0
+[Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+if ($pid -ne 0) { (Get-Process -Id $pid).ProcessName }
+    "#;
+    run_powershell_text(script)
 }
 
 #[cfg(target_os = "windows")]
