@@ -1,6 +1,6 @@
 import React from 'react';
 import { ViewState } from '../types';
-import { LayoutDashboard, Monitor, LogOut, Settings, Users } from 'lucide-react';
+import { LayoutDashboard, Monitor, LogOut, Settings, Users, Shield } from 'lucide-react';
 
 interface LayoutProps {
   currentView: ViewState;
@@ -26,16 +26,30 @@ export const Layout: React.FC<LayoutProps> = ({ currentView, onChangeView, child
     </button>
   );
 
+  const MobileNavItem = ({ view, icon: Icon, label }: { view: ViewState, icon: any, label: string }) => (
+    <button
+      onClick={() => onChangeView(view)}
+      className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all duration-200 w-full ${
+        currentView === view 
+          ? 'text-brand-600 bg-brand-50' 
+          : 'text-slate-400 hover:text-slate-600'
+      }`}
+    >
+      <Icon size={24} strokeWidth={currentView === view ? 2.5 : 2} />
+      <span className="text-[10px] font-medium mt-1">{label}</span>
+    </button>
+  );
+
   const logoUrl = "https://static.wixstatic.com/media/297e13_91fceac09fe745458d11b50051949432~mv2.png/v1/fill/w_194,h_110,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/logo_footer.png";
 
   return (
     <div className="flex h-screen bg-slate-50 font-sans">
-      {/* Sidebar */}
+      {/* Sidebar (Desktop Only) */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col">
         <div className="p-6 border-b border-slate-100">
            <div className="flex items-center gap-3">
-             <div className="h-12 px-3 bg-brand-600 rounded-xl flex items-center justify-center shadow-sm overflow-hidden shrink-0">
-                <img src={logoUrl} alt="Golpac" className="h-full w-auto object-contain py-2" />
+             <div className="h-12 px-2 bg-brand-600 rounded-xl flex items-center justify-center shadow-sm overflow-hidden shrink-0">
+                <img src={logoUrl} alt="Golpac" className="h-full w-auto object-contain py-1" />
              </div>
              <div className="flex flex-col">
                 <span className="text-lg font-bold text-slate-800 leading-none">Support</span>
@@ -47,27 +61,19 @@ export const Layout: React.FC<LayoutProps> = ({ currentView, onChangeView, child
         <nav className="flex-1 p-4 space-y-2">
           <NavItem view="dashboard" icon={LayoutDashboard} label="Dashboard" />
           <NavItem view="devices" icon={Monitor} label="Devices" />
-          {/* User management is accessed via the profile card, but could also be here if desired */}
+          <NavItem view="users" icon={Users} label="User Management" />
         </nav>
 
         <div className="p-4 border-t border-slate-100">
-           <button 
-             onClick={() => onChangeView('users')}
-             className={`w-full flex items-center space-x-3 p-3 rounded-lg border transition-all duration-200 text-left ${
-               currentView === 'users' 
-                 ? 'bg-brand-50 border-brand-200 ring-1 ring-brand-200' 
-                 : 'bg-slate-50 border-slate-100 hover:bg-white hover:shadow-md hover:border-slate-200'
-             }`}
-           >
+           <div className={`w-full flex items-center space-x-3 p-3 rounded-lg border transition-all duration-200 text-left bg-slate-50 border-slate-100`}>
              <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-500 font-bold">
                {currentUser ? currentUser.charAt(0).toUpperCase() : 'A'}
              </div>
              <div className="flex-1 overflow-hidden">
                <p className="text-sm font-medium text-slate-700 truncate">{currentUser || 'Admin User'}</p>
-               <p className="text-xs text-slate-400 truncate">Manage Users</p>
+               <p className="text-xs text-slate-400 truncate">Logged In</p>
              </div>
-             <Settings size={16} className="text-slate-400" />
-           </button>
+           </div>
            
            <button 
             onClick={onLogout}
@@ -80,22 +86,39 @@ export const Layout: React.FC<LayoutProps> = ({ currentView, onChangeView, child
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col h-screen overflow-hidden">
-        {/* Mobile Header */}
-        <header className="md:hidden bg-white border-b border-slate-200 p-4 flex items-center justify-between">
+      <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
+        {/* Mobile Top Header */}
+        <header className="md:hidden bg-white border-b border-slate-200 p-4 flex items-center justify-between shrink-0 z-10 sticky top-0">
            <div className="flex items-center gap-3">
-                <div className="h-9 px-2 bg-brand-600 rounded-lg flex items-center justify-center shrink-0">
-                     <img src={logoUrl} alt="Golpac" className="h-full w-auto object-contain py-1.5" />
+                <div className="h-8 px-2 bg-brand-600 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
+                     <img src={logoUrl} alt="Golpac" className="h-full w-auto object-contain py-1" />
                 </div>
                 <span className="font-bold text-slate-800 text-sm">Golpac Support</span>
            </div>
-           <button onClick={() => onChangeView('users')} className="text-slate-500"><Settings /></button>
+           <button 
+             onClick={onLogout} 
+             className="text-slate-400 hover:text-red-500 p-2"
+             title="Sign Out"
+            >
+              <LogOut size={20} />
+            </button>
         </header>
 
-        <div className="flex-1 overflow-auto p-4 md:p-8">
+        {/* Content Area */}
+        {/* Added pb-24 to ensure content isn't hidden behind the bottom nav on mobile */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-8 pb-24 md:pb-8">
             <div className="max-w-7xl mx-auto h-full">
                 {children}
             </div>
+        </div>
+
+        {/* Mobile Bottom Navigation */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 px-6 py-2 pb-safe z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+          <div className="flex justify-between items-center max-w-sm mx-auto gap-2">
+            <MobileNavItem view="dashboard" icon={LayoutDashboard} label="Dashboard" />
+            <MobileNavItem view="devices" icon={Monitor} label="Devices" />
+            <MobileNavItem view="users" icon={Shield} label="Manage" />
+          </div>
         </div>
       </main>
     </div>

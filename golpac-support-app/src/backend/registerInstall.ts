@@ -18,19 +18,26 @@ const INSTALL_ID_KEY = "golpac-install-id";
 const INSTALL_ENDPOINT = "https://golpac-support-vcercel.vercel.app/api/install";
 const INSTALL_TOKEN = "dxTLRLGrGg3Jh2ZujTLaavsg";
 
+let lastAppUsage: AppUsageStat[] = [];
+let lastWebUsage: WebUsageStat[] = [];
+
 async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage: WebUsageStat[] }> {
   try {
     const result = (await invoke("get_usage_snapshot")) as {
       appUsage?: AppUsageStat[];
       webUsage?: WebUsageStat[];
     };
-    return {
-      appUsage: Array.isArray(result?.appUsage) ? result.appUsage : [],
-      webUsage: Array.isArray(result?.webUsage) ? result.webUsage : [],
-    };
+    const appUsage = Array.isArray(result?.appUsage) && result.appUsage.length > 0 ? result.appUsage : lastAppUsage;
+    const webUsage = Array.isArray(result?.webUsage) && result.webUsage.length > 0 ? result.webUsage : lastWebUsage;
+
+    // Cache latest non-empty snapshots for future heartbeats
+    if (appUsage.length > 0) lastAppUsage = appUsage;
+    if (webUsage.length > 0) lastWebUsage = webUsage;
+
+    return { appUsage, webUsage };
   } catch (err) {
     console.warn("Usage snapshot unavailable:", err);
-    return { appUsage: [], webUsage: [] };
+    return { appUsage: lastAppUsage, webUsage: lastWebUsage };
   }
 }
 
@@ -58,6 +65,12 @@ async function postInstall(payload: Record<string, unknown>, attempt = 1) {
       const text = await res.text();
       throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`);
     }
+    console.debug(
+      "[Golpac heartbeat] success",
+      new Date().toISOString(),
+      "heartbeat:",
+      payload["heartbeat"] === true ? "yes" : "no"
+    );
   } catch (err) {
     if (attempt < 2) {
       console.warn("Install post failed, retrying once...", err);

@@ -95,9 +95,6 @@ export default async function handler(
     // 3. Map to UI format
     const devices = results.map((data: any) => {
         if (!data) return null;
-
-        const appUsage = Array.isArray(data.appUsage) ? data.appUsage : [];
-        const webUsage = Array.isArray(data.webUsage) ? data.webUsage : [];
         
         // Detect OS
         let osType = 'Unknown';
@@ -124,8 +121,8 @@ export default async function handler(
             userId: data.userId || data.installId.substring(0, 5),
             userName: data.userName || 'System User',
             company: data.company || '', // Return the stored company
-            appUsage, // Pass through usage data
-            webUsage  // Pass through usage data
+            appUsage: data.appUsage || [], // Pass through usage data
+            webUsage: data.webUsage || []  // Pass through usage data
         };
     })
     .filter(Boolean)
