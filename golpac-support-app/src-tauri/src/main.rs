@@ -58,8 +58,6 @@ const TRAY_MENU_ID_AI: &str = "golpac-tray-ai";
 #[cfg(target_os = "windows")]
 const TRAY_MENU_ID_HISTORY: &str = "golpac-tray-history";
 #[cfg(target_os = "windows")]
-const TRAY_MENU_ID_QUIT: &str = "golpac-tray-quit";
-#[cfg(target_os = "windows")]
 const TRAY_TOOLTIP: &str = "Golpac Support";
 #[cfg(target_os = "windows")]
 const NOTIFICATION_TITLE: &str = "Golpac Support";
@@ -1427,7 +1425,6 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
         .text(TRAY_MENU_ID_AI, "Golpac AI (Beta)")
         .text(TRAY_MENU_ID_HISTORY, "Ticket History")
         .text(TRAY_MENU_ID_SYSTEM, "System")
-        .text(TRAY_MENU_ID_QUIT, "Quit Golpac Support")
         .build()?;
 
     let mut tray_builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
@@ -1454,7 +1451,6 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
                 reveal_main_window(app_handle);
                 emit_tray_navigation(app_handle, "system");
             }
-            TRAY_MENU_ID_QUIT => app_handle.exit(0),
             _ => {}
         });
 
@@ -1552,6 +1548,9 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "registry",
         "ctfmon",
         "audiodg",
+        "dwm",
+        "aackingstondramhal_x86",
+        "aac3572mbhal_x86",
     ];
     if ignored.contains(&lower.as_str()) {
         return None;
@@ -1571,6 +1570,9 @@ fn normalize_process_name(raw: &str) -> Option<String> {
         "zoom" => "Zoom".to_string(),
         "onedrive" => "OneDrive".to_string(),
         "spotify" => "Spotify".to_string(),
+        "remoting_desktop" => "Remote Desktop".to_string(),
+        "remoting_host" => "Remote Desktop Host".to_string(),
+        "msmpeng" => "Windows Defender".to_string(),
         other => {
             if other.len() <= 2 {
                 return None;

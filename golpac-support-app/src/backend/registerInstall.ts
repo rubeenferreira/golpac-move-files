@@ -93,13 +93,17 @@ export async function registerInstall(getSystemInfo: () => Promise<SystemInfo>, 
 export async function sendInstallHeartbeat(appVersion: string) {
   const installId = ensureInstallId();
   if (!installId) return;
-  const { appUsage, webUsage } = await getUsageSnapshot();
-  await postInstall({
-    installId,
-    appVersion,
-    timestamp: new Date().toISOString(),
-    heartbeat: true,
-    appUsage,
-    webUsage,
-  });
+  try {
+    const { appUsage, webUsage } = await getUsageSnapshot();
+    await postInstall({
+      installId,
+      appVersion: appVersion || "unknown",
+      timestamp: new Date().toISOString(),
+      heartbeat: true,
+      appUsage,
+      webUsage,
+    });
+  } catch (err) {
+    console.error("Heartbeat failed:", err);
+  }
 }

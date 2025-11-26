@@ -246,7 +246,11 @@ function App() {
   useEffect(() => {
     getVersion()
       .then((v) => setAppVersion(v))
-      .catch((err) => console.error("Failed to get app version:", err));
+      .catch((err) => {
+        console.error("Failed to get app version:", err);
+        // Ensure downstream flows (install/heartbeat) still fire
+        setAppVersion("unknown");
+      });
 
     // Weekly update check on startup
     const lastCheck = localStorage.getItem("golpac-update-last-check");
