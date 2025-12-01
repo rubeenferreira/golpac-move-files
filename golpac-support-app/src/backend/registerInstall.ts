@@ -24,10 +24,20 @@ async function fetchUsageDeltas(): Promise<{ appUsage: AppUsageStat[]; webUsage:
     const result = (await invoke("get_usage_deltas")) as {
       appUsage?: AppUsageStat[];
       webUsage?: WebUsageStat[];
+      app_usage?: AppUsageStat[];
+      web_usage?: WebUsageStat[];
     };
+    const apps =
+      (Array.isArray(result?.appUsage) && result.appUsage) ||
+      (Array.isArray(result?.app_usage) && result.app_usage) ||
+      [];
+    const webs =
+      (Array.isArray(result?.webUsage) && result.webUsage) ||
+      (Array.isArray(result?.web_usage) && result.web_usage) ||
+      [];
     return {
-      appUsage: Array.isArray(result?.appUsage) ? result.appUsage : [],
-      webUsage: Array.isArray(result?.webUsage) ? result.webUsage : [],
+      appUsage: apps,
+      webUsage: webs,
     };
   } catch (err) {
     console.warn("Usage deltas unavailable:", err);
