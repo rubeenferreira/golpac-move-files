@@ -19,25 +19,76 @@ const INSTALL_TOKEN = "dxTLRLGrGg3Jh2ZujTLaavsg";
 
 let lastSystemInfo: Partial<SystemInfo> | null = null;
 
+type RawAppUsage = {
+  name?: string;
+  usageMinutes?: number;
+  usage_min?: number;
+  usageSeconds?: number;
+  usage_seconds?: number;
+};
+
+type RawWebUsage = {
+  domain?: string;
+  usageMinutes?: number;
+  usage_min?: number;
+  usageSeconds?: number;
+  usage_seconds?: number;
+  visits?: number;
+  category?: string;
+};
+
 async function fetchUsageDeltas(): Promise<{ appUsage: AppUsageStat[]; webUsage: WebUsageStat[] }> {
   try {
     const result = (await invoke("get_usage_deltas")) as {
-      appUsage?: AppUsageStat[];
-      webUsage?: WebUsageStat[];
-      app_usage?: AppUsageStat[];
-      web_usage?: WebUsageStat[];
+      appUsage?: RawAppUsage[];
+      webUsage?: RawWebUsage[];
+      app_usage?: RawAppUsage[];
+      web_usage?: RawWebUsage[];
     };
-    const apps =
+    const rawApps =
       (Array.isArray(result?.appUsage) && result.appUsage) ||
       (Array.isArray(result?.app_usage) && result.app_usage) ||
       [];
-    const webs =
+    const rawWebs =
       (Array.isArray(result?.webUsage) && result.webUsage) ||
       (Array.isArray(result?.web_usage) && result.web_usage) ||
       [];
+
+    const appUsage: AppUsageStat[] = rawApps
+      .map((a) => {
+        const seconds =
+          (a.usageSeconds as number | undefined) ??
+          (a.usage_seconds as number | undefined);
+        const minutes =
+          a.usageMinutes ??
+          (a as any).usage_min ??
+          (seconds != null ? seconds / 60 : 0);
+        const name = a.name || "Unknown";
+        return { name, usageMinutes: minutes };
+      })
+      .filter((a) => a.name);
+
+    const webUsage: WebUsageStat[] = rawWebs
+      .map((w) => {
+        const seconds =
+          (w.usageSeconds as number | undefined) ??
+          (w.usage_seconds as number | undefined);
+        const minutes =
+          w.usageMinutes ??
+          (w as any).usage_min ??
+          (seconds != null ? seconds / 60 : 0);
+        return {
+          domain: w.domain || "unknown",
+          usageMinutes: minutes,
+          visits: w.visits ?? 0,
+          category: w.category,
+        };
+      })
+      .filter((w) => w.domain);
+
     return {
-      appUsage: apps,
-      webUsage: webs,
+      appUsage,
+      webUsage,
     };
   } catch (err) {
     console.warn("Usage deltas unavailable:", err);
