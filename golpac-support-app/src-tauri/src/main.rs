@@ -5,7 +5,7 @@ use chrono::Utc;
 use once_cell::sync::Lazy;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, collections::HashSet, sync::Mutex};
+use std::{collections::HashMap, sync::Mutex};
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     process::Command,
@@ -91,7 +91,6 @@ struct ProcessCpuSample {
 #[cfg(target_os = "windows")]
 struct ForegroundTracker {
     usage_sec: HashMap<String, u64>,
-    running: HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -122,7 +121,6 @@ struct AppUsageWithColor {
 static FOREGROUND_TRACKER: Lazy<Mutex<ForegroundTracker>> = Lazy::new(|| {
     Mutex::new(ForegroundTracker {
         usage_sec: HashMap::new(),
-        running: HashSet::new(),
     })
 });
 
@@ -1666,7 +1664,7 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
     let mut usage: Vec<AppUsageWithColor> = Vec::new();
     let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
 
-    if tracker.usage_sec.is_empty() && tracker.running.is_empty() {
+    if tracker.usage_sec.is_empty() {
         return usage;
     }
 
@@ -1677,16 +1675,8 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
         .map(|(k, v)| (k.clone(), *v as f64 / 60.0))
         .collect();
 
-    // Include running apps with zero usage
-    for name in tracker.running.iter() {
-        if !tracker.usage_sec.contains_key(name) {
-            entries.push((name.clone(), 0.0));
-        }
-    }
-
     // Reset tracker for next window
     tracker.usage_sec.clear();
-    tracker.running.clear();
 
     let total: f64 = entries.iter().map(|(_, v)| *v).sum();
     let palette = [
@@ -1733,17 +1723,6 @@ $pid = 0
 if ($pid -ne 0) { (Get-Process -Id $pid).ProcessName }
     "#;
     run_powershell_text(script)
-}
-
-#[cfg(target_os = "windows")]
-fn list_running_process_names() -> Vec<String> {
-    let script = r#"
-        Get-Process | Select-Object -ExpandProperty ProcessName | Sort-Object -Unique | ConvertTo-Json
-    "#;
-    run_powershell_json(script)
-        .ok()
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
-        .unwrap_or_default()
 }
 
 #[cfg(target_os = "windows")]
@@ -1858,24 +1837,15 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
     {
         // Start foreground tracker thread once
         static TRACKER_STARTED: Lazy<()> = Lazy::new(|| {
-            std::thread::spawn(|| {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(1));
-                    if is_idle_more_than(Duration::from_secs(300)) {
-                        continue;
-                    }
-                    if let Ok(fg) = get_foreground_process() {
-                        if let Some(name) = normalize_process_name(&fg) {
-                            let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
-                            *tracker.usage_sec.entry(name).or_insert(0) += 1;
-                        }
-                    }
-                    // Track running processes with zero usage
-                    for pname in list_running_process_names() {
-                        if let Some(name) = normalize_process_name(&pname) {
-                            let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
-                            tracker.running.insert(name);
-                        }
+            std::thread::spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if is_idle_more_than(Duration::from_secs(300)) {
+                    continue;
+                }
+                if let Ok(fg) = get_foreground_process() {
+                    if let Some(name) = normalize_process_name(&fg) {
+                        let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+                        *tracker.usage_sec.entry(name).or_insert(0) += 1;
                     }
                 }
             });
