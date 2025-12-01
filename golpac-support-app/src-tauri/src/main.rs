@@ -94,7 +94,7 @@ struct WebUsageEntry {
     domain: String,
     #[serde(rename = "usageMinutes")]
     usage_minutes: f64,
-    #[serde(rename = "visitCount")]
+    #[serde(rename = "visits")]
     visit_count: i64,
     category: String,
 }
@@ -1949,6 +1949,11 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
     }
 }
 
+#[tauri::command]
+fn get_usage_deltas() -> Result<UsageSnapshot, String> {
+    get_usage_snapshot()
+}
+
 //
 // ───────── Tauri main ─────────
 //
@@ -1985,7 +1990,8 @@ fn main() {
             exit_application,
             read_ticket_history,
             write_ticket_history,
-            get_usage_snapshot
+            get_usage_snapshot,
+            get_usage_deltas
         ])
         .setup(|app| {
             if let Err(e) = app.autolaunch().enable() {
