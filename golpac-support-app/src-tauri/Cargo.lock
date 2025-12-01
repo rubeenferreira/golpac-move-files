@@ -1748,6 +1748,7 @@ dependencies = [
  "chrono",
  "image 0.25.9",
  "local-ip-address",
+ "once_cell",
  "reqwest 0.11.27",
  "screenshots",
  "serde",

@@ -2,8 +2,10 @@
 
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
+use once_cell::sync::Lazy;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, collections::HashSet, sync::Mutex};
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     process::Command,
@@ -18,8 +20,6 @@ use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
 use arboard::Clipboard;
 #[cfg(target_os = "windows")]
 use serde_json::Value;
-#[cfg(target_os = "windows")]
-use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use std::path::Path;
 #[cfg(target_os = "windows")]
@@ -88,6 +88,12 @@ struct ProcessCpuSample {
     cpu_seconds: f64,
 }
 
+#[cfg(target_os = "windows")]
+struct ForegroundTracker {
+    usage_sec: HashMap<String, u64>,
+    running: HashSet<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct WebUsageEntry {
     domain: String,
@@ -111,6 +117,14 @@ struct AppUsageWithColor {
     percentage: f64,
     color: String,
 }
+
+#[cfg(target_os = "windows")]
+static FOREGROUND_TRACKER: Lazy<Mutex<ForegroundTracker>> = Lazy::new(|| {
+    Mutex::new(ForegroundTracker {
+        usage_sec: HashMap::new(),
+        running: HashSet::new(),
+    })
+});
 
 #[derive(Serialize, Clone, Default)]
 struct DiskSnapshot {
@@ -1648,75 +1662,55 @@ fn normalize_process_name(raw: &str) -> Option<String> {
 
 #[cfg(target_os = "windows")]
 fn build_app_usage() -> Vec<AppUsageWithColor> {
-    // Sample CPU time twice ~1s apart and use the delta to reflect recent activity
-    fn sample_cpu() -> Vec<ProcessCpuSample> {
-        let script = r#"
-            $procs = Get-Process | Where-Object { $_.CPU -ge 0 } |
-                Select-Object -First 25 @{
-                    Name = "name"; Expression = { $_.ProcessName }
-                }, @{
-                    Name = "cpuSeconds"; Expression = { [math]::Round($_.CPU, 3) }
-                }
-            $procs | ConvertTo-Json
-        "#;
-        let value = run_powershell_json(script).unwrap_or(Value::Null);
-        serde_json::from_value(value).unwrap_or_default()
+    // Build from the 1s foreground tracker snapshot
+    let mut usage: Vec<AppUsageWithColor> = Vec::new();
+    let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+
+    if tracker.usage_sec.is_empty() && tracker.running.is_empty() {
+        return usage;
     }
 
-    let first = sample_cpu();
-    std::thread::sleep(std::time::Duration::from_millis(900));
-    let second = sample_cpu();
+    // Convert to minutes
+    let mut entries: Vec<(String, f64)> = tracker
+        .usage_sec
+        .iter()
+        .map(|(k, v)| (k.clone(), *v as f64 / 60.0))
+        .collect();
 
-    let mut by_name: HashMap<String, f64> = HashMap::new();
-    for s2 in &second {
-        if let Some(s1) = first.iter().find(|p| p.process_name == s2.process_name) {
-            let delta = (s2.cpu_seconds - s1.cpu_seconds).max(0.0);
-            if let Some(name) = normalize_process_name(&s2.process_name) {
-                *by_name.entry(name).or_insert(0.0) += delta;
-            }
+    // Include running apps with zero usage
+    for name in tracker.running.iter() {
+        if !tracker.usage_sec.contains_key(name) {
+            entries.push((name.clone(), 0.0));
         }
     }
 
-    // Add foreground process sample (counts as ~15 seconds)
-    if let Ok(fg_name) = get_foreground_process() {
-        if let Some(name) = normalize_process_name(&fg_name) {
-            *by_name.entry(name).or_insert(0.0) += 15.0;
-        }
-    }
+    // Reset tracker for next window
+    tracker.usage_sec.clear();
+    tracker.running.clear();
 
-    // Ensure visible list includes running processes even with 0 usage
-    for pname in list_running_process_names() {
-        if let Some(name) = normalize_process_name(&pname) {
-            by_name.entry(name).or_insert(0.0);
-        }
-    }
-
-    if by_name.is_empty() {
-        return Vec::new();
-    }
-
-    let mut items: Vec<(String, f64)> = by_name.into_iter().collect();
-    items.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    items.truncate(8);
-
-    let total: f64 = items.iter().map(|(_, v)| *v).sum();
+    let total: f64 = entries.iter().map(|(_, v)| *v).sum();
     let palette = [
         "#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#3b82f6", "#ec4899", "#f97316",
     ];
 
-    items
-        .into_iter()
-        .enumerate()
-        .map(|(idx, (name, cpu_seconds))| {
-            let minutes = cpu_seconds / 60.0;
-            AppUsageWithColor {
-                name,
-                usage_minutes: minutes.max(0.01),
-                percentage: ((cpu_seconds / total.max(0.1)) * 100.0 * 10.0).round() / 10.0,
-                color: palette[idx % palette.len()].to_string(),
-            }
-        })
-        .collect()
+    entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    entries.truncate(15);
+
+    for (idx, (name, minutes)) in entries.into_iter().enumerate() {
+        let pct = if total > 0.0 {
+            ((minutes / total) * 100.0 * 10.0).round() / 10.0
+        } else {
+            0.0
+        };
+        usage.push(AppUsageWithColor {
+            name,
+            usage_minutes: minutes,
+            percentage: pct,
+            color: palette[idx % palette.len()].to_string(),
+        });
+    }
+
+    usage
 }
 
 #[cfg(target_os = "windows")]
@@ -1847,6 +1841,32 @@ fn build_dns_web_usage() -> Vec<WebUsageEntry> {
 fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
     #[cfg(target_os = "windows")]
     {
+        // Start foreground tracker thread once
+        static TRACKER_STARTED: Lazy<()> = Lazy::new(|| {
+            std::thread::spawn(|| {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if is_idle_more_than(Duration::from_secs(300)) {
+                        continue;
+                    }
+                    if let Ok(fg) = get_foreground_process() {
+                        if let Some(name) = normalize_process_name(&fg) {
+                            let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+                            *tracker.usage_sec.entry(name).or_insert(0) += 1;
+                        }
+                    }
+                    // Track running processes with zero usage
+                    for pname in list_running_process_names() {
+                        if let Some(name) = normalize_process_name(&pname) {
+                            let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+                            tracker.running.insert(name);
+                        }
+                    }
+                }
+            });
+        });
+        Lazy::force(&TRACKER_STARTED);
+
         let app_usage = build_app_usage();
         let mut web_usage = build_web_usage();
         if web_usage.is_empty() {
