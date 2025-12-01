@@ -3,6 +3,7 @@
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use once_cell::sync::Lazy;
+use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Mutex};
@@ -91,12 +92,18 @@ struct ProcessCpuSample {
 #[cfg(target_os = "windows")]
 struct ForegroundTracker {
     usage_sec: HashMap<String, u64>,
+    web_sec: HashMap<String, u64>,
+    web_visits: HashMap<String, i64>,
+    current_domain: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct WebUsageEntry {
     domain: String,
-    visits: i64,
+    #[serde(rename = "usageMinutes")]
+    usage_minutes: f64,
+    #[serde(rename = "visitCount")]
+    visit_count: i64,
     category: String,
 }
 
@@ -121,6 +128,9 @@ struct AppUsageWithColor {
 static FOREGROUND_TRACKER: Lazy<Mutex<ForegroundTracker>> = Lazy::new(|| {
     Mutex::new(ForegroundTracker {
         usage_sec: HashMap::new(),
+        web_sec: HashMap::new(),
+        web_visits: HashMap::new(),
+        current_domain: None,
     })
 });
 
@@ -1720,9 +1730,53 @@ public class Win32 {
 $hwnd = [Win32]::GetForegroundWindow()
 $pid = 0
 [Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
-if ($pid -ne 0) { (Get-Process -Id $pid).ProcessName }
+        if ($pid -ne 0) { (Get-Process -Id $pid).ProcessName }
     "#;
     run_powershell_text(script)
+}
+
+#[cfg(target_os = "windows")]
+fn get_foreground_process_with_title() -> Result<(String, String), String> {
+    let script = r#"
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll", CharSet=CharSet.Auto, SetLastError=true)]
+    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+}
+"@
+$hwnd = [Win32]::GetForegroundWindow()
+if ($hwnd -eq 0) { return }
+$pid = 0
+[Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+$titleBuilder = New-Object System.Text.StringBuilder 512
+[Win32]::GetWindowText($hwnd, $titleBuilder, $titleBuilder.Capacity) | Out-Null
+$title = $titleBuilder.ToString()
+if ($pid -ne 0) { 
+  $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+  if ($proc) { 
+    $proc.ProcessName
+    $title
+  }
+}
+    "#;
+    if let Ok(output) = run_powershell_json(script) {
+        if let Some(arr) = output.as_array() {
+            if arr.len() >= 2 {
+                let pname = arr[0].as_str().unwrap_or_default().to_string();
+                let title = arr[1].as_str().unwrap_or_default().to_string();
+                if !pname.is_empty() {
+                    return Ok((pname, title));
+                }
+            }
+        }
+    }
+    Err("No foreground window".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -1837,15 +1891,36 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
     {
         // Start foreground tracker thread once
         static TRACKER_STARTED: Lazy<()> = Lazy::new(|| {
-            std::thread::spawn(|| loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if is_idle_more_than(Duration::from_secs(300)) {
-                    continue;
-                }
-                if let Ok(fg) = get_foreground_process() {
-                    if let Some(name) = normalize_process_name(&fg) {
-                        let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
-                        *tracker.usage_sec.entry(name).or_insert(0) += 1;
+            std::thread::spawn(|| {
+                let browser_procs = ["chrome", "msedge", "firefox", "brave"];
+                let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+                    .unwrap_or_else(|_| Regex::new("").unwrap());
+                let mut last_domain: Option<String> = None;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if is_idle_more_than(Duration::from_secs(300)) {
+                        continue;
+                    }
+                    if let Ok((proc_raw, title)) = get_foreground_process_with_title() {
+                        if let Some(name) = normalize_process_name(&proc_raw) {
+                            let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+                            *tracker.usage_sec.entry(name.clone()).or_insert(0) += 1;
+
+                            if browser_procs.iter().any(|p| name.contains(p)) {
+                                if let Some(cap) = domain_regex
+                                    .captures(&title)
+                                    .and_then(|c| c.get(1))
+                                    .map(|m| m.as_str().to_lowercase())
+                                {
+                                    let domain = cap;
+                                    *tracker.web_sec.entry(domain.clone()).or_insert(0) += 1;
+                                    if last_domain.as_deref() != Some(&domain) {
+                                        *tracker.web_visits.entry(domain.clone()).or_insert(0) += 1;
+                                        last_domain = Some(domain);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             });
@@ -1853,10 +1928,20 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
         Lazy::force(&TRACKER_STARTED);
 
         let app_usage = build_app_usage();
-        let mut web_usage = build_web_usage();
-        if web_usage.is_empty() {
-            web_usage = build_dns_web_usage();
-        }
+        let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+        let mut web_usage: Vec<WebUsageEntry> = tracker
+            .web_sec
+            .iter()
+            .map(|(domain, secs)| WebUsageEntry {
+                domain: domain.clone(),
+                usage_minutes: (*secs as f64) / 60.0,
+                visit_count: *tracker.web_visits.get(domain).unwrap_or(&0),
+                category: "Browsing".to_string(),
+            })
+            .collect();
+        tracker.web_sec.clear();
+        tracker.web_visits.clear();
+
         return Ok(UsageSnapshot {
             app_usage,
             web_usage,

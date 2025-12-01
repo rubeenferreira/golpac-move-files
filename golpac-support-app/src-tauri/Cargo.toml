@@ -35,3 +35,4 @@ reqwest = { version = "0.11", default-features = false, features = ["blocking", 
 chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-autostart = "2"
 once_cell = "1.19"
+regex = "1.10"
