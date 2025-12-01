@@ -1847,7 +1847,7 @@ fn build_web_usage() -> Vec<WebUsageEntry> {
 
     // Merge in DNS cache so visits reflect current browsing even if history isn't flushed yet
     for entry in build_dns_web_usage() {
-        *counts.entry(entry.domain).or_insert(0) += entry.visits;
+        *counts.entry(entry.domain).or_insert(0) += entry.visit_count;
     }
 
     let mut items: Vec<(String, i64)> = counts.into_iter().collect();
@@ -1858,7 +1858,8 @@ fn build_web_usage() -> Vec<WebUsageEntry> {
         .into_iter()
         .map(|(domain, visits)| WebUsageEntry {
             domain,
-            visits,
+            usage_minutes: 0.0,
+            visit_count: visits,
             category: "Browsing".to_string(),
         })
         .collect()
