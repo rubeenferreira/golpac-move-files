@@ -1747,6 +1747,21 @@ fn list_running_process_names() -> Vec<String> {
 }
 
 #[cfg(target_os = "windows")]
+fn is_idle_more_than(d: Duration) -> bool {
+    let script = r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $idleMs = [Environment]::TickCount64 - [System.Windows.Forms.SystemInformation]::LastInputTime
+        $idleMs
+    "#;
+    if let Ok(output) = run_powershell_text(script) {
+        if let Ok(ms) = output.trim().parse::<u128>() {
+            return Duration::from_millis(ms as u64) > d;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
 fn tally_history_file(path: &Path, counts: &mut HashMap<String, i64>) {
     if !path.exists() {
         return;
