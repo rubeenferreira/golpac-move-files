@@ -22,6 +22,7 @@ let lastSystemInfo: Partial<SystemInfo> | null = null;
 type RawAppUsage = {
   name?: string;
   usageMinutes?: number;
+  usage_minutes?: number;
   usage_min?: number;
   usageSeconds?: number;
   usage_seconds?: number;
@@ -30,6 +31,7 @@ type RawAppUsage = {
 type RawWebUsage = {
   domain?: string;
   usageMinutes?: number;
+  usage_minutes?: number;
   usage_min?: number;
   usageSeconds?: number;
   usage_seconds?: number;
@@ -61,6 +63,7 @@ async function fetchUsageDeltas(): Promise<{ appUsage: AppUsageStat[]; webUsage:
           (a.usage_seconds as number | undefined);
         const minutes =
           a.usageMinutes ??
+          (a as any).usage_minutes ??
           (a as any).usage_min ??
           (seconds != null ? seconds / 60 : 0);
         const name = a.name || "Unknown";
@@ -75,6 +78,7 @@ async function fetchUsageDeltas(): Promise<{ appUsage: AppUsageStat[]; webUsage:
           (w.usage_seconds as number | undefined);
         const minutes =
           w.usageMinutes ??
+          (w as any).usage_minutes ??
           (w as any).usage_min ??
           (seconds != null ? seconds / 60 : 0);
         return {
