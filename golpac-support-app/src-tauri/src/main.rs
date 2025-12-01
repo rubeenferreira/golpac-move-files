@@ -81,14 +81,6 @@ struct SystemInfo {
     domain: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct ProcessCpuSample {
-    #[serde(rename = "name")]
-    process_name: String,
-    #[serde(rename = "cpuSeconds")]
-    cpu_seconds: f64,
-}
-
 #[cfg(target_os = "windows")]
 struct ForegroundTracker {
     usage_sec: HashMap<String, u64>,
@@ -1795,6 +1787,15 @@ fn is_idle_more_than(d: Duration) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn extract_focus_token(title: &str) -> Option<String> {
+    let re = Regex::new(r"^\s*([^-]+)").ok()?;
+    re.captures(title)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(target_os = "windows")]
 fn tally_history_file(path: &Path, counts: &mut HashMap<String, i64>) {
     if !path.exists() {
         return;
@@ -1894,8 +1895,6 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
         static TRACKER_STARTED: Lazy<()> = Lazy::new(|| {
             std::thread::spawn(|| {
                 let browser_procs = ["chrome", "msedge", "firefox", "brave"];
-                let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
-                    .unwrap_or_else(|_| Regex::new("").unwrap());
                 let mut last_domain: Option<String> = None;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -1908,12 +1907,8 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
                             *tracker.usage_sec.entry(name.clone()).or_insert(0) += 1;
 
                             if browser_procs.iter().any(|p| name.contains(p)) {
-                                if let Some(cap) = domain_regex
-                                    .captures(&title)
-                                    .and_then(|c| c.get(1))
-                                    .map(|m| m.as_str().to_lowercase())
-                                {
-                                    let domain = cap;
+                                if let Some(token) = extract_focus_token(&title) {
+                                    let domain = token.to_lowercase();
                                     *tracker.web_sec.entry(domain.clone()).or_insert(0) += 1;
                                     if last_domain.as_deref() != Some(&domain) {
                                         *tracker.web_visits.entry(domain.clone()).or_insert(0) += 1;
@@ -1930,7 +1925,7 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
 
         let app_usage = build_app_usage();
         let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
-        let mut web_usage: Vec<WebUsageEntry> = tracker
+        let web_usage: Vec<WebUsageEntry> = tracker
             .web_sec
             .iter()
             .map(|(domain, secs)| WebUsageEntry {
