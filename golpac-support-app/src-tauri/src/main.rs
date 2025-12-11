@@ -7,6 +7,9 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Mutex};
+
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     process::Command,
@@ -67,6 +70,18 @@ const NOTIFICATION_BODY: &str = "Golpac Support Application is still running in 
 const MAIN_WINDOW_LABEL: &str = "main";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const STILL_CAPTURE_INTERVAL_SECS: u64 = 15;
+#[cfg(target_os = "windows")]
+const STILL_MAX_TOTAL_BYTES: u64 = 1_000_000_000; // ~1 GB cap for local storage
+#[cfg(target_os = "windows")]
+const STILL_MAX_RETENTION_HOURS: u64 = 48;
+#[cfg(target_os = "windows")]
+const TARGET_DOMAIN_KEYWORDS: [&str; 1] = ["coretechsolutions.app"];
+#[cfg(target_os = "windows")]
+const TARGET_SAGE_KEYWORDS: [&str; 4] = ["pvxwin32", "sage 300", "sage300", "accpac"];
+#[cfg(target_os = "windows")]
+const TARGET_BROWSERS: [&str; 4] = ["chrome", "msedge", "brave", "msedgewebview2"];
 
 //
 // ───────── System info ─────────
@@ -789,6 +804,287 @@ fn restore_window(window: &tauri::Window) {
     let _ = window.show();
     let _ = window.set_focus();
 }
+
+#[cfg(target_os = "windows")]
+fn capture_primary_screen_png() -> Result<Vec<u8>, String> {
+    use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
+    use screenshots::Screen;
+
+    let screens = Screen::all().map_err(|e| format!("Failed to enumerate screens: {e}"))?;
+    let screen = screens.first().ok_or_else(|| "No screens detected".to_string())?;
+
+    let raw = screen
+        .capture()
+        .map_err(|e| format!("Failed to capture screen: {e}"))?;
+
+    let width = raw.width();
+    let height = raw.height();
+    let pixels = raw.into_vec();
+
+    let mut png_bytes = Vec::new();
+    {
+        let encoder = PngEncoder::new(&mut png_bytes);
+        encoder
+            .write_image(&pixels, width, height, ColorType::Rgba8.into())
+            .map_err(|e| format!("Failed to encode still: {e}"))?;
+    }
+
+    Ok(png_bytes)
+}
+
+#[cfg(target_os = "windows")]
+fn slugify_label(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "capture".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_browser_process(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    TARGET_BROWSERS
+        .iter()
+        .any(|b| lower == *b || lower.contains(*b))
+}
+
+#[cfg(target_os = "windows")]
+fn detect_target_context(process: &str, title: &str, domain_regex: &Regex) -> Option<String> {
+    let proc_lower = process.to_lowercase();
+    let title_lower = title.to_lowercase();
+
+    if TARGET_SAGE_KEYWORDS
+        .iter()
+        .any(|key| proc_lower.contains(key) || title_lower.contains(key))
+    {
+        return Some("sage300".to_string());
+    }
+
+    if is_browser_process(&proc_lower) {
+        if let Some(cap) = domain_regex
+            .captures(&title_lower)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+        {
+            if TARGET_DOMAIN_KEYWORDS
+                .iter()
+                .any(|domain| cap.contains(domain))
+            {
+                return Some("coretechsolutions.app".to_string());
+            }
+        }
+
+        if TARGET_DOMAIN_KEYWORDS
+            .iter()
+            .any(|domain| title_lower.contains(domain))
+        {
+            return Some("coretechsolutions.app".to_string());
+        }
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn capture_and_store_still(
+    base_dir: &Path,
+    reason: &str,
+    process: &str,
+    title: &str,
+) -> Result<(), String> {
+    fs::create_dir_all(base_dir).map_err(|e| format!("Failed to create recording dir: {e}"))?;
+
+    let png = capture_primary_screen_png()?;
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
+    let slug = slugify_label(reason);
+    let filename = format!("still_{timestamp}_{slug}.png");
+    let png_path = base_dir.join(filename);
+
+    fs::write(&png_path, png).map_err(|e| format!("Failed to write still: {e}"))?;
+
+    let meta = serde_json::json!({
+        "capturedAt": timestamp,
+        "process": process,
+        "windowTitle": title,
+        "reason": reason,
+        "path": png_path.to_string_lossy(),
+    });
+    let meta_path = png_path.with_extension("json");
+    let _ = fs::write(&meta_path, serde_json::to_vec_pretty(&meta).unwrap_or_default());
+
+    prune_recordings(base_dir, STILL_MAX_TOTAL_BYTES, STILL_MAX_RETENTION_HOURS);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn prune_recordings(dir: &Path, max_total_bytes: u64, max_age_hours: u64) {
+    #[derive(Default)]
+    struct Group {
+        stem: String,
+        png: Option<(PathBuf, std::fs::Metadata)>,
+        json: Option<(PathBuf, std::fs::Metadata)>,
+        size: u64,
+        modified: std::time::SystemTime,
+    }
+
+    let mut groups: std::collections::HashMap<String, Group> = std::collections::HashMap::new();
+    let now = std::time::SystemTime::now();
+    let max_age = Duration::from_secs(max_age_hours.saturating_mul(3600));
+
+    let entries = match fs::read_dir(dir) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ext = match path.extension().and_then(|e| e.to_str()) {
+            Some(e) => e.to_ascii_lowercase(),
+            None => continue,
+        };
+        if ext != "png" && ext != "json" {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified = meta.modified().unwrap_or(now);
+
+        let group = groups
+            .entry(stem.clone())
+            .or_insert_with(|| Group {
+                stem,
+                modified,
+                ..Default::default()
+            });
+
+        group.size = group.size.saturating_add(meta.len());
+        if modified < group.modified {
+            group.modified = modified;
+        }
+        if ext == "png" {
+            group.png = Some((path, meta));
+        } else {
+            group.json = Some((path, meta));
+        }
+    }
+
+    // Remove groups past retention
+    for group in groups
+        .values()
+        .filter(|g| {
+            let modified = g.modified;
+            now.duration_since(modified).map(|age| age > max_age).unwrap_or(false)
+        })
+        .map(|g| g.stem.clone())
+        .collect::<Vec<_>>()
+    {
+        if let Some(g) = groups.remove(&group) {
+            if let Some((p, _)) = g.png {
+                let _ = fs::remove_file(&p);
+            }
+            if let Some((j, _)) = g.json {
+                let _ = fs::remove_file(&j);
+            }
+        }
+    }
+
+    let mut total: u64 = groups.values().map(|g| g.size).sum();
+    if total <= max_total_bytes {
+        return;
+    }
+
+    let mut items: Vec<(String, Group)> = groups.into_iter().collect();
+    items.sort_by_key(|(_, g)| g.modified);
+
+    for (stem, grp) in items {
+        if total <= max_total_bytes {
+            break;
+        }
+        if let Some(png) = &grp.png {
+            let _ = fs::remove_file(&png.0);
+        }
+        if let Some(json) = &grp.json {
+            let _ = fs::remove_file(&json.0);
+        }
+        total = total.saturating_sub(grp.size);
+        eprintln!("Pruned old recording group: {}", stem);
+    }
+}
+
+#[cfg(target_os = "windows")]
+static STILL_MONITOR_STARTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+
+#[cfg(target_os = "windows")]
+fn start_target_still_monitor(app: &AppHandle) {
+    if STILL_MONITOR_STARTED
+        .swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let resolver = app_handle.path_resolver();
+        let base_dir = resolver
+            .app_local_data_dir()
+            .unwrap_or_else(|| std::env::temp_dir())
+            .join("recordings");
+
+        let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+            .unwrap_or_else(|_| Regex::new("").unwrap());
+
+        let mut last_capture = Instant::now()
+            .checked_sub(Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS))
+            .unwrap_or_else(Instant::now);
+        let mut last_reason: Option<String> = None;
+
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+
+            let Ok((proc_raw, title_raw)) = get_foreground_process_with_title() else {
+                continue;
+            };
+
+            let reason = detect_target_context(&proc_raw, &title_raw, &domain_regex);
+            if let Some(r) = reason {
+                let needs_capture = last_capture.elapsed() >= Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS)
+                    || last_reason.as_deref() != Some(r.as_str());
+
+                if needs_capture {
+                    if let Err(err) =
+                        capture_and_store_still(&base_dir, &r, &proc_raw, &title_raw)
+                    {
+                        eprintln!("Still capture failed: {err}");
+                    } else {
+                        last_capture = Instant::now();
+                        last_reason = Some(r);
+                    }
+                }
+            } else {
+                last_reason = None;
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_target_still_monitor(_app: &AppHandle) {}
 
 #[tauri::command]
 fn test_internet_connection() -> Result<PingSummary, String> {
@@ -2003,6 +2299,7 @@ fn main() {
             {
                 setup_windows_tray(app)?;
                 ensure_notification_permission(&app.handle());
+                start_target_still_monitor(app);
             }
             monitor_network(app.handle().clone());
 
