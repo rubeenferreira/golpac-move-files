@@ -1052,6 +1052,7 @@ fn start_target_still_monitor(app: &AppHandle) {
             .app_local_data_dir()
             .unwrap_or_else(|_| std::env::temp_dir())
             .join("recordings");
+        let _ = fs::create_dir_all(&base_dir);
 
         let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
             .unwrap_or_else(|_| Regex::new("").unwrap());
@@ -1063,8 +1064,9 @@ fn start_target_still_monitor(app: &AppHandle) {
         loop {
             std::thread::sleep(Duration::from_secs(2));
 
-            let Ok((proc_raw, title_raw)) = get_foreground_process_with_title() else {
-                continue;
+            let (proc_raw, title_raw) = match get_foreground_process_with_title() {
+                Ok(v) => v,
+                Err(_) => ("unknown".to_string(), "unknown".to_string()),
             };
 
             let reason = detect_target_context(&proc_raw, &title_raw, &domain_regex)
