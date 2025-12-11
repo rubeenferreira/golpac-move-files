@@ -1055,18 +1055,18 @@ fn start_target_still_monitor(app: &AppHandle) {
 
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        let primary_dir = app_handle
-            .path()
-            .app_local_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir())
+        // Primary fallback: temp dir so we always have a writable location.
+        let mut base_dir = std::env::temp_dir()
+            .join("golpac-support-app")
             .join("recordings");
-        let mut base_dir = primary_dir.clone();
-        if let Err(e) = fs::create_dir_all(&base_dir) {
-            eprintln!("Failed to create recordings dir at {:?}: {e}", base_dir);
-            base_dir = std::env::temp_dir()
-                .join("golpac-support-app")
-                .join("recordings");
-            let _ = fs::create_dir_all(&base_dir);
+        let _ = fs::create_dir_all(&base_dir);
+
+        // Secondary: try app-local-data dir if available.
+        if let Ok(app_dir) = app_handle.path().app_local_data_dir() {
+            let candidate = app_dir.join("recordings");
+            if fs::create_dir_all(&candidate).is_ok() {
+                base_dir = candidate;
+            }
         }
 
         let mut log_path = base_dir.join("recording.log");
@@ -1078,6 +1078,7 @@ fn start_target_still_monitor(app: &AppHandle) {
             .checked_sub(Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS))
             .unwrap_or_else(Instant::now);
         let mut last_log = Instant::now();
+        log_path = maybe_log(&log_path, format!("using base_dir {:?}", base_dir));
 
         loop {
             std::thread::sleep(Duration::from_secs(2));
@@ -1121,7 +1122,9 @@ fn start_target_still_monitor(_app: &AppHandle) {}
 #[cfg(target_os = "windows")]
 fn maybe_log(path: &std::path::Path, message: String) -> std::path::PathBuf {
     let log_path = if path.as_os_str().is_empty() {
-        std::env::temp_dir().join("golpac_recording.log")
+        std::env::temp_dir()
+            .join("golpac-support-app")
+            .join("recording.log")
     } else {
         path.to_path_buf()
     };
