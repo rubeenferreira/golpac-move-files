@@ -367,14 +367,6 @@ function formatSystemMetricsText(metrics) {
       );
     });
   }
-  if (Array.isArray(metrics.bitlocker) && metrics.bitlocker.length) {
-    parts.push("BitLocker:");
-    metrics.bitlocker.forEach((vol) => {
-      parts.push(
-        ` - ${vol.volume || "Unknown"}: ${vol.protection_status || "Unknown"} | ${vol.lock_status || "Unknown"}${vol.encryption_percentage != null ? ` | ${formatNumber(vol.encryption_percentage)}% encrypted` : ""}`
-      );
-    });
-  }
   return parts.join("\n");
 }
 
@@ -430,40 +422,10 @@ function formatSystemMetricsHtml(metrics) {
     `;
   }
 
-  let bitlockerHtml = "";
-  if (Array.isArray(metrics.bitlocker) && metrics.bitlocker.length) {
-    const blList = metrics.bitlocker
-      .map(
-        (vol) => `
-        <li style="margin:0 0 6px;">
-          <strong>${escapeHtml(vol.volume || "Unknown volume")}</strong>
-          <div style="font-size:12px;color:#111827;">
-            ${escapeHtml(vol.protection_status || "Unknown")} • ${escapeHtml(vol.lock_status || "Unknown")}${
-              vol.encryption_percentage != null
-                ? ` • ${formatNumber(vol.encryption_percentage)}% encrypted`
-                : ""
-            }
-          </div>
-        </li>`
-      )
-      .join("");
-    bitlockerHtml = `
-      <tr>
-        <td style="padding:4px 0;color:#6b7280;width:150px;vertical-align:top;">BitLocker</td>
-        <td style="padding:4px 0;">
-          <ul style="padding-left:16px;margin:0;list-style:disc;">
-            ${blList}
-          </ul>
-        </td>
-      </tr>
-    `;
-  }
-
   return `
     <table cellpadding="0" cellspacing="0" style="width:100%;font-size:13px;color:#111827;margin-bottom:16px;">
       ${rowsHtml}
       ${disksHtml}
-      ${bitlockerHtml}
     </table>
   `;
 }
