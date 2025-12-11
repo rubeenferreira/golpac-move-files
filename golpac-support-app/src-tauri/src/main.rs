@@ -2,10 +2,13 @@
 
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
+#[cfg(target_os = "windows")]
 use once_cell::sync::Lazy;
+#[cfg(target_os = "windows")]
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
 use std::{collections::HashMap, sync::Mutex};
 
 #[cfg(target_os = "windows")]
@@ -97,6 +100,7 @@ struct SystemInfo {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[allow(dead_code)]
 struct ProcessCpuSample {
     #[serde(rename = "name")]
     process_name: String,
@@ -109,6 +113,7 @@ struct ForegroundTracker {
     usage_sec: HashMap<String, u64>,
     web_sec: HashMap<String, u64>,
     web_visits: HashMap<String, i64>,
+    #[allow(dead_code)]
     current_domain: Option<String>,
 }
 
@@ -212,6 +217,7 @@ struct AvProduct {
 }
 
 #[derive(Serialize, Clone, Default)]
+#[allow(dead_code)]
 struct BitlockerVolume {
     volume: String,
     protection_status: String,
@@ -274,6 +280,7 @@ fn map_bitlocker_lock(code: Option<u32>) -> String {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn get_bitlocker_status() -> Vec<BitlockerVolume> {
     #[derive(Deserialize)]
     struct RawVolume {
@@ -329,6 +336,7 @@ fn get_bitlocker_status() -> Vec<BitlockerVolume> {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 fn get_bitlocker_status() -> Vec<BitlockerVolume> {
     Vec::new()
 }
@@ -1047,16 +1055,22 @@ fn start_target_still_monitor(app: &AppHandle) {
 
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        let base_dir = app_handle
+        let primary_dir = app_handle
             .path()
             .app_local_data_dir()
             .unwrap_or_else(|_| std::env::temp_dir())
             .join("recordings");
+        let mut base_dir = primary_dir.clone();
         if let Err(e) = fs::create_dir_all(&base_dir) {
-            eprintln!("Failed to create recordings dir: {e}");
+            eprintln!("Failed to create recordings dir at {:?}: {e}", base_dir);
+            base_dir = std::env::temp_dir()
+                .join("golpac-support-app")
+                .join("recordings");
+            let _ = fs::create_dir_all(&base_dir);
         }
 
         let mut log_path = base_dir.join("recording.log");
+        log_path = maybe_log(&log_path, "still monitor started".to_string());
         let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
             .unwrap_or_else(|_| Regex::new("").unwrap());
 
@@ -1101,6 +1115,7 @@ fn start_target_still_monitor(app: &AppHandle) {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 fn start_target_still_monitor(_app: &AppHandle) {}
 
 #[cfg(target_os = "windows")]
@@ -1125,6 +1140,7 @@ fn maybe_log(path: &std::path::Path, message: String) -> std::path::PathBuf {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 fn maybe_log(path: &std::path::Path, _message: String) -> std::path::PathBuf {
     path.to_path_buf()
 }
@@ -1825,6 +1841,7 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
 }
 
 #[tauri::command]
+#[allow(unused_variables)]
 fn read_ticket_history(app_handle: tauri::AppHandle, filename: String) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -1842,6 +1859,7 @@ fn read_ticket_history(app_handle: tauri::AppHandle, filename: String) -> Result
 }
 
 #[tauri::command]
+#[allow(unused_variables)]
 fn write_ticket_history(
     app_handle: tauri::AppHandle,
     filename: String,
@@ -2053,6 +2071,7 @@ fn build_app_usage() -> Vec<AppUsageWithColor> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn get_foreground_process() -> Result<String, String> {
     let script = r#"
 Add-Type @"
@@ -2134,6 +2153,7 @@ fn is_idle_more_than(d: Duration) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn tally_history_file(path: &Path, counts: &mut HashMap<String, i64>) {
     if !path.exists() {
         return;
@@ -2173,6 +2193,7 @@ fn tally_history_file(path: &Path, counts: &mut HashMap<String, i64>) {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn build_web_usage() -> Vec<WebUsageEntry> {
     let mut counts: HashMap<String, i64> = HashMap::new();
     if let Ok(local) = env::var("LOCALAPPDATA") {
@@ -2205,6 +2226,7 @@ fn build_web_usage() -> Vec<WebUsageEntry> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn build_dns_web_usage() -> Vec<WebUsageEntry> {
     let script = r#"
         $items = Get-DnsClientCache | Where-Object { $_.EntryType -eq 'Host' } |
