@@ -928,13 +928,24 @@ fn capture_and_store_still(
 
 #[cfg(target_os = "windows")]
 fn prune_recordings(dir: &Path, max_total_bytes: u64, max_age_hours: u64) {
-    #[derive(Default)]
     struct Group {
         stem: String,
         png: Option<(PathBuf, std::fs::Metadata)>,
         json: Option<(PathBuf, std::fs::Metadata)>,
         size: u64,
         modified: std::time::SystemTime,
+    }
+
+    impl Group {
+        fn new(stem: String, modified: std::time::SystemTime) -> Self {
+            Self {
+                stem,
+                png: None,
+                json: None,
+                size: 0,
+                modified,
+            }
+        }
     }
 
     let mut groups: std::collections::HashMap<String, Group> = std::collections::HashMap::new();
@@ -967,11 +978,7 @@ fn prune_recordings(dir: &Path, max_total_bytes: u64, max_age_hours: u64) {
 
         let group = groups
             .entry(stem.clone())
-            .or_insert_with(|| Group {
-                stem,
-                modified,
-                ..Default::default()
-            });
+            .or_insert_with(|| Group::new(stem, modified));
 
         group.size = group.size.saturating_add(meta.len());
         if modified < group.modified {
@@ -1040,8 +1047,8 @@ fn start_target_still_monitor(app: &AppHandle) {
 
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        let resolver = app_handle.path_resolver();
-        let base_dir = resolver
+        let base_dir = app_handle
+            .path()
             .app_local_data_dir()
             .unwrap_or_else(|| std::env::temp_dir())
             .join("recordings");
@@ -2226,7 +2233,7 @@ fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
 
         let app_usage = build_app_usage();
         let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
-        let mut web_usage: Vec<WebUsageEntry> = tracker
+        let web_usage: Vec<WebUsageEntry> = tracker
             .web_sec
             .iter()
             .map(|(domain, secs)| WebUsageEntry {
@@ -2299,7 +2306,7 @@ fn main() {
             {
                 setup_windows_tray(app)?;
                 ensure_notification_permission(&app.handle());
-                start_target_still_monitor(app);
+                start_target_still_monitor(&app.handle());
             }
             monitor_network(app.handle().clone());
 
