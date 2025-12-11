@@ -1050,7 +1050,7 @@ fn start_target_still_monitor(app: &AppHandle) {
         let base_dir = app_handle
             .path()
             .app_local_data_dir()
-            .unwrap_or_else(|| std::env::temp_dir())
+            .unwrap_or_else(|_| std::env::temp_dir())
             .join("recordings");
 
         let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
@@ -1059,7 +1059,6 @@ fn start_target_still_monitor(app: &AppHandle) {
         let mut last_capture = Instant::now()
             .checked_sub(Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS))
             .unwrap_or_else(Instant::now);
-        let mut last_reason: Option<String> = None;
 
         loop {
             std::thread::sleep(Duration::from_secs(2));
@@ -1068,23 +1067,15 @@ fn start_target_still_monitor(app: &AppHandle) {
                 continue;
             };
 
-            let reason = detect_target_context(&proc_raw, &title_raw, &domain_regex);
-            if let Some(r) = reason {
-                let needs_capture = last_capture.elapsed() >= Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS)
-                    || last_reason.as_deref() != Some(r.as_str());
+            let reason = detect_target_context(&proc_raw, &title_raw, &domain_regex)
+                .unwrap_or_else(|| "continuous".to_string());
 
-                if needs_capture {
-                    if let Err(err) =
-                        capture_and_store_still(&base_dir, &r, &proc_raw, &title_raw)
-                    {
-                        eprintln!("Still capture failed: {err}");
-                    } else {
-                        last_capture = Instant::now();
-                        last_reason = Some(r);
-                    }
+            if last_capture.elapsed() >= Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS) {
+                if let Err(err) = capture_and_store_still(&base_dir, &reason, &proc_raw, &title_raw) {
+                    eprintln!("Still capture failed: {err}");
+                } else {
+                    last_capture = Instant::now();
                 }
-            } else {
-                last_reason = None;
             }
         }
     });
