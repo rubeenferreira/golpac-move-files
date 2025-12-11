@@ -117,6 +117,19 @@ function aggregateDailyUsage(appUsage: AppUsageStat[], webUsage: WebUsageStat[])
   return { appsAggregated, websAggregated };
 }
 
+function ensureUsageFallback(
+  appUsage: AppUsageStat[],
+  webUsage: WebUsageStat[]
+): { appUsage: AppUsageStat[]; webUsage: WebUsageStat[] } {
+  const apps = appUsage.length > 0 ? appUsage : [
+    { name: "Unknown", usageMinutes: 0.1, percentage: 100, color: "#0ea5e9" },
+  ];
+  const webs = webUsage.length > 0 ? webUsage : [
+    { domain: "unknown", visits: 0, category: "Browsing" },
+  ];
+  return { appUsage: apps, webUsage: webs };
+}
+
 async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage: WebUsageStat[] }> {
   try {
     const result = (await invoke("get_usage_snapshot")) as {
@@ -131,12 +144,14 @@ async function getUsageSnapshot(): Promise<{ appUsage: AppUsageStat[]; webUsage:
     if (webUsage.length > 0) lastWebUsage = webUsage;
 
     const { appsAggregated, websAggregated } = aggregateDailyUsage(appUsage, webUsage);
+    const withFallback = ensureUsageFallback(appsAggregated, websAggregated);
 
-    return { appUsage: appsAggregated, webUsage: websAggregated };
+    return withFallback;
   } catch (err) {
     console.warn("Usage snapshot unavailable:", err);
     const { appsAggregated, websAggregated } = aggregateDailyUsage(lastAppUsage, lastWebUsage);
-    return { appUsage: appsAggregated, webUsage: websAggregated };
+    const withFallback = ensureUsageFallback(appsAggregated, websAggregated);
+    return withFallback;
   }
 }
 

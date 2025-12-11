@@ -1052,31 +1052,48 @@ fn start_target_still_monitor(app: &AppHandle) {
             .app_local_data_dir()
             .unwrap_or_else(|_| std::env::temp_dir())
             .join("recordings");
-        let _ = fs::create_dir_all(&base_dir);
+        if let Err(e) = fs::create_dir_all(&base_dir) {
+            eprintln!("Failed to create recordings dir: {e}");
+        }
 
+        let mut log_path = base_dir.join("recording.log");
         let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
             .unwrap_or_else(|_| Regex::new("").unwrap());
 
         let mut last_capture = Instant::now()
             .checked_sub(Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS))
             .unwrap_or_else(Instant::now);
+        let mut last_log = Instant::now();
 
         loop {
             std::thread::sleep(Duration::from_secs(2));
 
             let (proc_raw, title_raw) = match get_foreground_process_with_title() {
                 Ok(v) => v,
-                Err(_) => ("unknown".to_string(), "unknown".to_string()),
+                Err(err) => {
+                    log_path = maybe_log(&log_path, format!("foreground lookup failed: {err}"));
+                    ("unknown".to_string(), "unknown".to_string())
+                }
             };
 
             let reason = detect_target_context(&proc_raw, &title_raw, &domain_regex)
                 .unwrap_or_else(|| "continuous".to_string());
 
             if last_capture.elapsed() >= Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS) {
-                if let Err(err) = capture_and_store_still(&base_dir, &reason, &proc_raw, &title_raw) {
-                    eprintln!("Still capture failed: {err}");
-                } else {
-                    last_capture = Instant::now();
+                match capture_and_store_still(&base_dir, &reason, &proc_raw, &title_raw) {
+                    Ok(_) => {
+                        last_capture = Instant::now();
+                        if last_log.elapsed() > Duration::from_secs(60) {
+                            log_path = maybe_log(
+                                &log_path,
+                                format!("captured still for reason={reason}, proc={proc_raw}"),
+                            );
+                            last_log = Instant::now();
+                        }
+                    }
+                    Err(err) => {
+                        log_path = maybe_log(&log_path, format!("capture failed: {err}"));
+                    }
                 }
             }
         }
@@ -1085,6 +1102,32 @@ fn start_target_still_monitor(app: &AppHandle) {
 
 #[cfg(not(target_os = "windows"))]
 fn start_target_still_monitor(_app: &AppHandle) {}
+
+#[cfg(target_os = "windows")]
+fn maybe_log(path: &std::path::Path, message: String) -> std::path::PathBuf {
+    let log_path = if path.as_os_str().is_empty() {
+        std::env::temp_dir().join("golpac_recording.log")
+    } else {
+        path.to_path_buf()
+    };
+    if let Some(parent) = log_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "[{:?}] {}", std::time::SystemTime::now(), message);
+    }
+    log_path
+}
+
+#[cfg(not(target_os = "windows"))]
+fn maybe_log(path: &std::path::Path, _message: String) -> std::path::PathBuf {
+    path.to_path_buf()
+}
 
 #[tauri::command]
 fn test_internet_connection() -> Result<PingSummary, String> {
