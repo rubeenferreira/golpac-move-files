@@ -4,18 +4,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { buildAiAnswer, DeviceStatus, ConversationState } from "./ai/aiLogic";
 import golpacLogo from "./assets/golpac-logo.png";
-import { TroubleshootPanel } from "./components/TroubleshootPanel";
 import { SystemPanel } from "./components/SystemPanel";
-
-type SystemInfo = {
-  hostname: string;
-  username: string;
-  os_version?: string;
-  osVersion?: string;
-  ipv4: string;
-  domain?: string | null;
-};
+import { TroubleshootPanel } from "./components/TroubleshootPanel";
+import { AiAssistant } from "./components/AiAssistant";
+import { TicketHistory, TicketRecord } from "./components/TicketHistory";
+import { registerInstall, sendInstallHeartbeat } from "./backend/registerInstall";
+import { SystemInfo } from "./types";
 
 type Urgency = "Low" | "Normal" | "High";
 
@@ -89,6 +85,30 @@ type VpnStatus = {
 
 const PREFS_KEY = "golpac-support-preferences";
 const PRINTER_CACHE_KEY = "golpac-printers-cache";
+const TICKETS_KEY = "golpac-ticket-history";
+const TICKETS_FILE_NAME = "golpac-ticket-history.json";
+
+async function readTicketsFile(): Promise<TicketRecord[] | null> {
+  try {
+    const text = await invoke<string>("read_ticket_history", { filename: TICKETS_FILE_NAME });
+    const parsed = JSON.parse(text) as TicketRecord[];
+    if (Array.isArray(parsed)) return parsed;
+  } catch (err) {
+    console.warn("Ticket history file read failed:", err);
+  }
+  return null;
+}
+
+async function writeTicketsFile(records: TicketRecord[]) {
+  try {
+    await invoke("write_ticket_history", {
+      filename: TICKETS_FILE_NAME,
+      contents: JSON.stringify(records, null, 2),
+    });
+  } catch (err) {
+    console.warn("Ticket history file write failed:", err);
+  }
+}
 
 type PrinterCache = {
   printers: PrinterInfo[];
@@ -99,7 +119,7 @@ const SAGE_ISSUE_OPTIONS = [
   {
     value: "general",
     label: "General Issues",
-    description: "Performance, database connection, user permissions",
+    description: "Freezing, crashing, slow, login or database connection issues",
   },
   {
     value: "gl",
@@ -174,16 +194,44 @@ function App() {
   const [systemOverview, setSystemOverview] = useState<SystemInfo | null>(null);
   const [appContextDetails, setAppContextDetails] = useState<string | null>(null);
   const [loadingAppContext, setLoadingAppContext] = useState(false);
-  const [activeNav, setActiveNav] = useState<"home" | "troubleshoot" | "system">("home");
+  const [activeNav, setActiveNav] = useState<"home" | "troubleshoot" | "system" | "ai" | "history">("home");
   const [pingState, setPingState] = useState<PingState>({ status: "idle" });
   const [showPingDetails, setShowPingDetails] = useState(false);
   const [vpnState, setVpnState] = useState<PingState>({ status: "idle" });
   const [showVpnDetails, setShowVpnDetails] = useState(false);
   const [lastVpnResult, setLastVpnResult] = useState<VpnStatus | null>(null);
+  const [driverState, setDriverState] = useState<PingState>({ status: "idle" });
   const [avLoading, setAvLoading] = useState(false);
   const [avItems, setAvItems] = useState<
     { name: string; running: boolean; lastScan?: string | null }[]
   >([]);
+  const [aiQuestion, setAiQuestion] = useState("");
+  const [aiHistory, setAiHistory] = useState<
+    { id: number; question: string; answer: string; actionLabel?: string; actionTarget?: "troubleshoot" | "ticket" }[]
+  >([]);
+  const [aiFlow, setAiFlow] = useState<ConversationState>({
+    activeIntent: undefined,
+    stepIndex: 0,
+    sage: undefined,
+  });
+  const [aiTicketFormOpen, setAiTicketFormOpen] = useState(false);
+  const [aiTicketDraft, setAiTicketDraft] = useState<{
+    subject: string;
+    category: Category;
+    description: string;
+    userEmail: string;
+    urgency: Urgency;
+  }>({ subject: "", category: "General", description: "", userEmail: "", urgency: "Normal" });
+  const [lastTicketDraft, setLastTicketDraft] = useState<typeof aiTicketDraft | null>(null);
+  const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
+  const [aiTimer, setAiTimer] = useState<number | null>(null);
+  const [aiFollowUpTimer, setAiFollowUpTimer] = useState<number | null>(null);
+  const [aiAnalyzing, setAiAnalyzing] = useState(false);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState<null | { version: string; notes?: string }>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
+  const [tickets, setTickets] = useState<TicketRecord[]>([]);
 
   const initialOffline =
     typeof navigator !== "undefined" ? !navigator.onLine : false;
@@ -194,12 +242,46 @@ function App() {
     SAGE_ISSUE_OPTIONS.find((opt) => opt.value === selectedSageIssue) ||
     SAGE_ISSUE_OPTIONS[0];
 
+  useEffect(() => {
+    const win = getCurrentWindow();
+    win.setSkipTaskbar(false).catch(() => {
+      /* ignore */
+    });
+  }, []);
+
   // --- App version ---------------------------------------------------------
   useEffect(() => {
+    const stored = localStorage.getItem("golpac-app-version");
+    if (stored) {
+      setAppVersion(stored);
+    }
     getVersion()
-      .then((v) => setAppVersion(v))
-      .catch((err) => console.error("Failed to get app version:", err));
+      .then((v) => {
+        setAppVersion(v);
+        localStorage.setItem("golpac-app-version", v);
+      })
+      .catch((err) => {
+        console.error("Failed to get app version:", err);
+        if (!stored) {
+          setAppVersion("unknown");
+        }
+      });
+
+    // Weekly update check on startup
+    const lastCheck = localStorage.getItem("golpac-update-last-check");
+    const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    if (!lastCheck || now - Number(lastCheck) > oneWeekMs) {
+      performUpdateCheck(false);
+    }
   }, []);
+
+  // Auto-dismiss update errors after a few seconds
+  useEffect(() => {
+    if (!updateError) return;
+    const timer = window.setTimeout(() => setUpdateError(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [updateError]);
 
   // --- Close → hide + notification (once per session) ----------------------
   useEffect(() => {
@@ -293,6 +375,29 @@ function App() {
       .catch((err) => console.error("Failed to preload system info:", err));
   }, []);
 
+  // Register install with backend (Vercel) once app version is known
+  useEffect(() => {
+    if (!appVersion) return;
+    registerInstall(() => loadSystemInfo(), appVersion);
+  }, [appVersion]);
+
+  useEffect(() => {
+    if (!appVersion) return;
+    const runHeartbeat = () => sendInstallHeartbeat(appVersion);
+    runHeartbeat();
+    const interval = window.setInterval(runHeartbeat, 5 * 1000);
+    return () => window.clearInterval(interval);
+  }, [appVersion]);
+
+  // Fire a heartbeat immediately when the OS regains connectivity
+  useEffect(() => {
+    const handler = () => {
+      sendInstallHeartbeat(appVersion || "unknown");
+    };
+    window.addEventListener("online", handler);
+    return () => window.removeEventListener("online", handler);
+  }, [appVersion]);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<boolean>("network-status", (event) => {
@@ -346,11 +451,16 @@ function App() {
       if (
         target === "home" ||
         target === "troubleshoot" ||
-        target === "system"
+        target === "system" ||
+        target === "ai" ||
+        target === "history"
       ) {
         setActiveNav(target);
         if (target === "system") {
           loadSystemMetrics();
+        }
+        if (target === "troubleshoot") {
+          loadAntivirusStatus();
         }
       }
     }).then((fn) => (unlisten = fn));
@@ -358,6 +468,29 @@ function App() {
     return () => {
       if (unlisten) unlisten();
     };
+  }, []);
+
+  useEffect(() => {
+    const loadTickets = async () => {
+      const fromFile = await readTicketsFile();
+      if (fromFile) {
+        setTickets(fromFile);
+        return;
+      }
+      // fallback to localStorage
+      try {
+        const raw = window.localStorage.getItem(TICKETS_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as TicketRecord[];
+          if (Array.isArray(parsed)) {
+            setTickets(parsed);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load ticket history:", err);
+      }
+    };
+    loadTickets();
   }, []);
 
   useEffect(() => {
@@ -375,6 +508,25 @@ function App() {
   useEffect(() => {
     if (activeNav === "troubleshoot") {
       loadAntivirusStatus();
+    }
+  }, [activeNav]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(TICKETS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as TicketRecord[];
+        if (Array.isArray(parsed)) {
+          setTickets(parsed);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load ticket history:", err);
+    }
+  }, []);
+  useEffect(() => {
+    if (activeNav === "system") {
+      loadSystemMetrics();
     }
   }, [activeNav]);
 
@@ -595,14 +747,11 @@ function App() {
         running: boolean;
         last_scan?: string | null;
       }[];
-      const normalized = (result || [])
-        .map((item) => ({
-          name: item.name,
-          running: !!item.running,
-          lastScan: item.last_scan ?? null,
-        }))
-        // Only keep detected products (running or have data)
-        .filter((item) => item.running || (item.lastScan && item.lastScan.trim() !== ""));
+      const normalized = (result || []).map((item) => ({
+        name: item.name,
+        running: !!item.running,
+        lastScan: item.last_scan ?? null,
+      }));
       setAvItems(normalized);
     } catch (err) {
       console.error("Failed to load antivirus status:", err);
@@ -639,15 +788,347 @@ function App() {
     }
   }
 
-  async function handleExitApp() {
+  async function handleLaunchAntivirus(name: string) {
     try {
-      await invoke("exit_application");
+      await invoke("launch_antivirus", { product: name });
     } catch (err) {
-      console.error("Failed to exit app:", err);
+      console.error("Failed to launch antivirus:", err);
     }
   }
 
-  async function handlePingTest() {
+  async function performUpdateCheck(manual: boolean) {
+    setUpdateError(null);
+    setUpdateChecking(true);
+    try {
+      const updater = (window as any).__TAURI__?.updater;
+      if (!updater) {
+        if (manual) setUpdateError("Updater not available in this build.");
+        return;
+      }
+      const result = await updater.checkUpdate();
+      if (result.shouldUpdate && result.manifest) {
+        setUpdateAvailable({
+          version: result.manifest.version,
+          notes: result.manifest.body,
+        });
+      } else if (manual) {
+        setUpdateAvailable(null);
+        setUpdateError("You're already on the latest version.");
+      }
+      localStorage.setItem("golpac-update-last-check", Date.now().toString());
+    } catch (err) {
+      console.error("Update check failed:", err);
+      if (manual) {
+        setUpdateError("Could not check for updates. Please try again later.");
+      }
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!updateAvailable) return;
+    setUpdateInstalling(true);
+    setUpdateError(null);
+    try {
+      const updater = (window as any).__TAURI__?.updater;
+      if (!updater) {
+        setUpdateError("Updater not available in this build.");
+        setUpdateInstalling(false);
+        return;
+      }
+      await updater.installUpdate();
+      const proc = (window as any).__TAURI__?.process;
+      if (proc?.relaunch) {
+        await proc.relaunch();
+      }
+    } catch (err) {
+      console.error("Install update failed:", err);
+      setUpdateError("Failed to install the update. Please try again later.");
+    } finally {
+      setUpdateInstalling(false);
+    }
+  }
+
+  function buildDeviceStatus(
+    pingOverride?: PingResult | null,
+    vpnOverride?: VpnStatus | null
+  ): DeviceStatus {
+    const metrics = systemMetrics;
+    const pingResult = pingOverride ?? pingState.result;
+    const internetStatus: "online" | "offline" | "degraded" | "unknown" = isOffline
+      ? "offline"
+      : (() => {
+          if (pingResult?.success) {
+            const loss = pingResult.packet_loss ?? 0;
+            if (loss > 20) return "degraded";
+            return "online";
+          }
+          if (pingState.status === "error") return "unknown";
+          return "unknown";
+        })();
+
+    const vpnInfo = vpnOverride ?? lastVpnResult;
+    const vpnStatus: "connected" | "disconnected" | "unknown" = vpnInfo
+      ? vpnInfo.active
+        ? "connected"
+        : "disconnected"
+      : "unknown";
+
+    const memUsed = metrics?.memory_used_gb ?? null;
+    const memTotal = metrics?.memory_total_gb ?? null;
+    const ram =
+      memUsed != null && memTotal != null
+        ? `${Math.round(memUsed)} GB / ${Math.round(memTotal)} GB`
+        : null;
+
+    const drives =
+      metrics?.disks?.map((d) => {
+        const total = d.total_gb || 0;
+        const free = d.free_gb || 0;
+        const usedPercent =
+          total > 0 ? Math.min(100, Math.max(0, ((total - free) / total) * 100)) : null;
+        return {
+          name: d.name || null,
+          mount: d.mount || null,
+          usedPercent,
+          freeGb: d.free_gb ?? null,
+          totalGb: d.total_gb ?? null,
+        };
+      }) ?? [];
+
+    const avStatus: NonNullable<DeviceStatus["antivirus"]>["status"] =
+      avItems.length === 0 ? "none" : avItems.every((a) => a.running) ? "ok" : "warning";
+    const avVendor = avItems[0]?.name || null;
+
+    return {
+      network: {
+        internetStatus,
+        vpnStatus,
+        defaultGateway: metrics?.default_gateway ?? null,
+        publicIp: metrics?.public_ip ?? null,
+      },
+      system: {
+        name: systemOverview?.hostname || null,
+        ipv4: systemOverview?.ipv4 || null,
+        domain: systemOverview?.domain || null,
+        ram,
+        cpu: metrics?.cpu_brand || null,
+      },
+      health: {
+        uptime: metrics?.uptime_human ?? null,
+        cpuUsage: metrics?.cpu_usage_percent ?? null,
+        lastCaptured: metrics?.timestamp ?? null,
+      },
+      drivers: {
+        outdatedCount: null,
+      },
+      antivirus: {
+        status: avStatus,
+        vendor: avVendor,
+      },
+      storage: {
+        drives,
+      },
+    };
+  }
+
+
+  function matchesAny(text: string, patterns: string[]) {
+    const norm = text.toLowerCase();
+    return patterns.some((p) => norm.includes(p.toLowerCase()));
+  }
+
+  const intentToCategory = (intent: string | undefined): Category => {
+    switch (intent) {
+      case "PRINTERS":
+        return "Printers";
+      case "SAGE300":
+        return "Sage 300";
+      case "OUTLOOK_EMAIL":
+      case "OFFICE365":
+        return "Email";
+      default:
+        return "General";
+    }
+  };
+
+  const pushAiMessage = (
+    question: string,
+    answer: string,
+    action?: { actionLabel: string; actionTarget: "troubleshoot" | "ticket" },
+    ticketData?: { subject?: string; category?: string; description?: string }
+  ) => {
+    if (ticketData) {
+      setLastTicketDraft((prev) => ({
+        subject: ticketData.subject || prev?.subject || "AI Assistant Summary",
+        category: (ticketData.category as Category) || prev?.category || "General",
+        description: ticketData.description || prev?.description || "",
+        userEmail: prev?.userEmail || userEmail,
+        urgency: prev?.urgency || urgency,
+      }));
+    }
+    const baseId = Date.now();
+    setAiHistory((prev) => [...prev, { id: baseId, question, answer, ...action }].slice(-50));
+  };
+
+  async function handleAskAi() {
+    const question = aiQuestion.trim();
+    if (!question) return;
+    const recent = aiHistory.slice(-3).map((m) => m.question);
+    let pingResultOverride: PingResult | null | undefined;
+    let vpnResultOverride: VpnStatus | null | undefined;
+    let driverResultOverride: { outdated_count: number; sample: { device: string; version: string; date: string }[] } | null = null;
+    let deviceStatus = buildDeviceStatus();
+
+    // Auto-run troubleshooting actions when the question implies it.
+    const wantsVpnCheck = matchesAny(question, ["vpn status", "am i on vpn", "connected to vpn", "vpn connected", "check vpn"]);
+    const wantsNetworkCheck = matchesAny(question, ["am i online", "internet status", "network status", "check internet", "connected to network"]);
+    const wantsDriverCheck = matchesAny(question, ["driver", "drivers", "outdated driver", "old driver"]);
+
+    if (wantsVpnCheck || wantsNetworkCheck || wantsDriverCheck) {
+      setAiAnalyzing(true);
+      try {
+        if (wantsNetworkCheck) {
+          pingResultOverride = await handlePingTest();
+        }
+        if (wantsVpnCheck) {
+          vpnResultOverride = await handleVpnTest();
+        }
+        if (wantsDriverCheck) {
+          driverResultOverride = await handleDriverCheck();
+        }
+        deviceStatus = buildDeviceStatus(pingResultOverride, vpnResultOverride);
+      } catch (err) {
+        console.error("Auto-run troubleshoot failed:", err);
+      } finally {
+        setAiAnalyzing(false);
+      }
+    }
+
+    const pingStateForAnswer: PingState =
+      pingResultOverride != null
+        ? {
+            ...pingState,
+            result: pingResultOverride,
+            status: pingResultOverride.success ? "success" : "error",
+          }
+        : pingState;
+    const lastVpnForAnswer = vpnResultOverride ?? lastVpnResult;
+
+    const response = buildAiAnswer(
+      question,
+      recent,
+      {
+        isOffline,
+        pingState: pingStateForAnswer,
+        printers,
+        lastVpnResult: lastVpnForAnswer,
+        avItems,
+        systemMetrics,
+      },
+      aiHistory,
+      aiFlow,
+      deviceStatus
+    );
+    if (response.ticketData) {
+      const draft = {
+        subject: response.ticketData?.subject || "AI Assistant Summary",
+        category: intentToCategory(response.ticketData?.category as string | undefined),
+        description: response.ticketData?.description || "",
+        userEmail: userEmail,
+        urgency: urgency,
+      };
+      setLastTicketDraft(draft);
+      setAiTicketDraft(draft);
+    }
+    if (driverResultOverride) {
+      const count = driverResultOverride.outdated_count;
+      const hasNamed = driverResultOverride.sample.some(
+        (d) => d.device && d.device.trim() && d.device.toLowerCase() !== "unknown"
+      );
+      if (!hasNamed) {
+        response.answer = `Your scan found ${count} very old driver${count === 1 ? "" : "s"}. Names weren't reported. Please contact Golpac IT or submit a ticket for help updating them.`;
+        response.followUp = undefined;
+      }
+    }
+    const actionForAnswer =
+      response.followUp
+        ? undefined
+        : (response.actionLabel && response.actionTarget
+            ? { actionLabel: response.actionLabel, actionTarget: response.actionTarget }
+            : null) ||
+          (response.ticketData
+            ? { actionLabel: "Open ticket form", actionTarget: "ticket" as const }
+            : null) ||
+          (wantsNetworkCheck || wantsVpnCheck || wantsDriverCheck
+            ? { actionLabel: "View details in Troubleshoot", actionTarget: "troubleshoot" as const }
+            : null) ||
+          undefined;
+
+    pushAiMessage(question, response.answer, actionForAnswer, response.ticketData);
+
+    if (response.flow) {
+      setAiFlow(response.flow);
+    }
+
+    if (aiFollowUpTimer) {
+      window.clearTimeout(aiFollowUpTimer);
+      setAiFollowUpTimer(null);
+    }
+    setAiAnalyzing(false);
+
+    if (response.followUp) {
+      setAiAnalyzing(true);
+      const delay = response.followUpDelayMs ?? 2000;
+
+      const timerId = window.setTimeout(() => {
+        setAiAnalyzing(false);
+        const followAction =
+          (response.actionLabel && response.actionTarget
+            ? { actionLabel: response.actionLabel, actionTarget: response.actionTarget }
+          : null) ||
+          (response.ticketData
+            ? { actionLabel: "Open ticket form", actionTarget: "ticket" as const }
+            : null) ||
+          undefined;
+        pushAiMessage("", response.followUp!, followAction, response.ticketData);
+      }, delay);
+
+      setAiFollowUpTimer(timerId);
+    } else {
+      setAiAnalyzing(false);
+    }
+
+    setAiQuestion("");
+
+    if (aiTimer) {
+      window.clearTimeout(aiTimer);
+    }
+    const timerId = window.setTimeout(() => {
+      setAiHistory([]);
+      setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined });
+    }, 10 * 60 * 1000);
+    setAiTimer(timerId);
+  }
+
+  function handleClearAi() {
+    if (aiTimer) {
+      window.clearTimeout(aiTimer);
+      setAiTimer(null);
+    }
+    if (aiFollowUpTimer) {
+      window.clearTimeout(aiFollowUpTimer);
+      setAiFollowUpTimer(null);
+    }
+    setAiAnalyzing(false);
+    setAiHistory([]);
+    setAiQuestion("");
+    setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined });
+    setAiTicketFormOpen(false);
+  }
+
+  async function handlePingTest(): Promise<PingResult | null> {
     setPingState({ status: "loading" });
     setShowPingDetails(false);
     try {
@@ -660,6 +1141,7 @@ function App() {
         details,
         result,
       });
+      return result;
     } catch (err) {
       console.error("Failed to run ping test:", err);
       setPingState({
@@ -669,10 +1151,11 @@ function App() {
         details:
           err instanceof Error ? err.message : "Unknown error while testing.",
       });
+      return null;
     }
   }
 
-  async function handleVpnTest() {
+  async function handleVpnTest(): Promise<VpnStatus | null> {
     setVpnState({ status: "loading" });
     setShowVpnDetails(false);
     try {
@@ -695,6 +1178,7 @@ function App() {
           : null;
         setVpnState({ status: "error", message, details });
       }
+      return result;
     } catch (err) {
       console.error("Failed to check VPN status:", err);
       setVpnState({
@@ -702,6 +1186,59 @@ function App() {
         message: "Could not determine VPN status. Please try again.",
         details: err instanceof Error ? err.message : "Unknown error.",
       });
+      return null;
+    }
+  }
+
+  async function handleDriverCheck(): Promise<{ outdated_count: number; sample: { device: string; version: string; date: string }[] } | null> {
+    setDriverState({ status: "loading" });
+    try {
+      const result = (await invoke("get_driver_status")) as {
+        outdated_count: number;
+        sample: { device: string; version: string; date: string }[];
+      };
+      if (result.outdated_count > 0) {
+        const lines = result.sample.map((d, idx) => {
+          const parts: string[] = [];
+          const name = d.device && d.device.trim() ? d.device.trim() : null;
+          const version = d.version && d.version.trim() ? d.version.trim() : null;
+          const date = d.date && d.date.trim() ? d.date.trim() : null;
+
+          const label =
+            name && name.toLowerCase() !== "unknown"
+              ? name
+              : `Device ${idx + 1} (name not reported)`;
+          parts.push(`${idx + 1}. ${label}`);
+          parts.push(`Version: ${version ?? "Not reported"}`);
+          parts.push(`Date: ${date ?? "Not reported"}`);
+          return parts.join(" | ");
+        });
+        if (result.outdated_count > lines.length) {
+          lines.push(`(showing ${lines.length} of ${result.outdated_count} very old drivers)`);
+        }
+        if (lines.length === 0) {
+          lines.push("No details available from the scan.");
+        }
+        setDriverState({
+          status: "error",
+          message: `Found ${result.outdated_count} very old driver(s).`,
+          details: `${lines.join("\n")}\n\nFor help updating these, please submit a ticket or call Golpac IT.`,
+        });
+      } else {
+        setDriverState({
+          status: "success",
+          message: "No obviously outdated drivers detected.",
+        });
+      }
+      return result;
+    } catch (err) {
+      console.error("Failed to check drivers:", err);
+      setDriverState({
+        status: "error",
+        message: "Could not check drivers. Please try again.",
+        details: err instanceof Error ? err.message : "Unknown error",
+      });
+      return null;
     }
   }
 
@@ -738,17 +1275,26 @@ function App() {
     return <pre className="app-context-pre">{appContextDetails}</pre>;
   };
 
-  const handleNavClick = (tab: "home" | "troubleshoot" | "system") => {
+  const handleNavClick = (tab: "home" | "troubleshoot" | "system" | "ai" | "history") => {
     setActiveNav(tab);
     if (tab === "system") {
       loadSystemMetrics();
     }
+    if (tab === "troubleshoot") {
+      loadAntivirusStatus();
+    }
   };
 
   // --- Form submission -----------------------------------------------------
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!subject.trim() || !description.trim()) return;
+  async function handleSubmit(e?: FormEvent, draft?: { subject: string; description: string; category: Category; userEmail: string; urgency: Urgency }) {
+    if (e) e.preventDefault();
+    const effectiveSubject = draft?.subject ?? subject;
+    const effectiveDescription = draft?.description ?? description;
+    const effectiveCategory = draft?.category ?? category;
+    const effectiveUserEmail = draft?.userEmail ?? userEmail;
+    const effectiveUrgency = draft?.urgency ?? urgency;
+
+    if (!effectiveSubject.trim() || !effectiveDescription.trim()) return;
 
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       setStatus("error");
@@ -787,11 +1333,11 @@ function App() {
       }
 
       const payload = {
-        subject,
-        description,
-        userEmail: userEmail || null,
-        urgency,
-        category,
+        subject: effectiveSubject,
+        description: effectiveDescription,
+        userEmail: effectiveUserEmail || null,
+        urgency: effectiveUrgency,
+        category: effectiveCategory,
         printerInfo: categoryDetail,
         screenshots,
         screenshot: screenshots[0] ?? null,
@@ -850,13 +1396,30 @@ function App() {
           urgency,
         };
           window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+          const record: TicketRecord = {
+            id: `${createdAt}-${Math.random().toString(36).slice(2, 8)}`,
+            createdAt,
+            subject,
+            category,
+            description,
+            userEmail: userEmail || null,
+            urgency,
+          };
+          const nextTickets = [record, ...tickets].slice(0, 100);
+          setTickets(nextTickets);
+          window.localStorage.setItem(TICKETS_KEY, JSON.stringify(nextTickets));
+          await writeTicketsFile(nextTickets);
         } catch (err) {
           console.error("Failed to save preferences:", err);
         }
       }
 
-      setSubject("");
-      setDescription("");
+      if (!draft) {
+        setSubject("");
+        setDescription("");
+        setUrgency("Normal");
+        setCategory("General");
+      }
       setScreenshots([]);
       setStatus("success");
     } catch (err) {
@@ -908,8 +1471,24 @@ function App() {
             <span className="icon">🛠</span>
             <span>Troubleshoot</span>
           </button>
+          <button
+            type="button"
+            className={`side-button ${activeNav === "ai" ? "active" : ""}`}
+            onClick={() => handleNavClick("ai")}
+          >
+            <span className="icon">🤖</span>
+            <span>Golpac AI (Beta)</span>
+          </button>
         </div>
         <div className="sidebar-bottom">
+          <button
+            type="button"
+            className={`side-button ${activeNav === "history" ? "active" : ""}`}
+            onClick={() => handleNavClick("history")}
+          >
+            <span className="icon">🗂</span>
+            <span>Ticket History</span>
+          </button>
           <button
             type="button"
             className={`side-button ${activeNav === "system" ? "active" : ""}`}
@@ -918,7 +1497,17 @@ function App() {
             <span className="icon">⚙️</span>
             <span>System</span>
           </button>
-          <button type="button" className="side-button exit" onClick={handleExitApp}>
+          <button
+            type="button"
+            className="side-button exit"
+            onClick={() => {
+              const win = getCurrentWindow();
+              win
+                .hide()
+                .then(() => win.setSkipTaskbar(true))
+                .catch((err) => console.error("Failed to hide window:", err));
+            }}
+          >
             <span className="icon">⏻</span>
             <span>Exit</span>
           </button>
@@ -1232,6 +1821,36 @@ function App() {
               showVpnDetails={showVpnDetails && !!vpnState.details}
               onToggleVpnDetails={() => setShowVpnDetails((prev) => !prev)}
               antivirus={{ loading: avLoading, items: avItems }}
+              onLaunchAntivirus={handleLaunchAntivirus}
+              driverState={driverState}
+              onDriverCheck={handleDriverCheck}
+            />
+          </main>
+        ) : activeNav === "ai" ? (
+          <main className="shell-body troubleshoot-view ai-view">
+            <AiAssistant
+              question={aiQuestion}
+              onQuestionChange={setAiQuestion}
+              onAsk={handleAskAi}
+              onClear={handleClearAi}
+              history={aiHistory}
+              analyzing={aiAnalyzing}
+              onOpenTroubleshoot={() => handleNavClick("troubleshoot")}
+              onOpenTicket={() => {
+                if (lastTicketDraft) {
+                  setAiTicketDraft(lastTicketDraft);
+                }
+                setAiTicketFormOpen(true);
+                pushAiMessage("", "Ticket form opened. Review the details and press Send to IT.", undefined);
+              }}
+            />
+          </main>
+        ) : activeNav === "history" ? (
+          <main className="shell-body troubleshoot-view">
+            <TicketHistory
+              tickets={tickets}
+              expandedId={expandedTicketId}
+              onToggle={(id) => setExpandedTicketId((prev) => (prev === id ? null : id))}
             />
           </main>
         ) : (
@@ -1245,10 +1864,165 @@ function App() {
           </main>
         )}
 
+        {aiTicketFormOpen && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.55)",
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              zIndex: 2000,
+            }}
+          >
+            <div
+              className="troubleshoot-card"
+              style={{
+                width: "520px",
+                maxWidth: "90vw",
+                maxHeight: "90vh",
+                overflowY: "auto",
+                boxShadow: "0 20px 60px rgba(0,0,0,0.45)",
+              }}
+            >
+              <h3 style={{ marginBottom: 4 }}>Submit this as a ticket</h3>
+              <p style={{ marginTop: 0, marginBottom: 16, color: "var(--text-muted)" }}>
+                Review and edit before sending. Subject and description are required.
+              </p>
+              <div className="form-row two-col">
+                <label className="field">
+                  <span>Subject</span>
+                  <input
+                    type="text"
+                    value={aiTicketDraft.subject}
+                    onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, subject: e.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>Category</span>
+                  <div className="select-wrapper">
+                    <select
+                      value={aiTicketDraft.category}
+                      onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, category: e.target.value as Category }))}
+                    >
+                      <option value="General">General</option>
+                      <option value="Printers">Printers</option>
+                      <option value="Sage 300">Sage 300</option>
+                      <option value="Adobe">Adobe</option>
+                      <option value="Office 365">Office 365</option>
+                      <option value="Email">Email</option>
+                      <option value="Other">Other</option>
+                    </select>
+                  </div>
+                </label>
+              </div>
+              <label className="field">
+                <span>Description</span>
+                <textarea
+                  rows={4}
+                  value={aiTicketDraft.description}
+                  onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, description: e.target.value }))}
+                />
+              </label>
+              <div className="form-row two-col">
+                <label className="field">
+                  <span>Your email (optional)</span>
+                  <input
+                    type="email"
+                    value={aiTicketDraft.userEmail}
+                    onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, userEmail: e.target.value }))}
+                  />
+                </label>
+                <label className="field">
+                  <span>Urgency</span>
+                  <div className="select-wrapper">
+                    <select
+                      value={aiTicketDraft.urgency}
+                      onChange={(e) => setAiTicketDraft((prev) => ({ ...prev, urgency: e.target.value as Urgency }))}
+                    >
+                      <option value="Low">Low</option>
+                      <option value="Normal">Normal</option>
+                      <option value="High">High</option>
+                    </select>
+                  </div>
+                </label>
+              </div>
+                <div className="submit-row" style={{ justifyContent: "space-between" }}>
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    style={{ background: "#c53030", borderColor: "#c53030", color: "#fff" }}
+                    onClick={() => {
+                      setAiTicketFormOpen(false);
+                    }}
+                  >
+                    Cancel
+                </button>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={async () => {
+                    if (!aiTicketDraft.subject.trim() || !aiTicketDraft.description.trim()) {
+                      pushAiMessage("", "Subject and description are required to submit a ticket.", undefined);
+                      return;
+                    }
+                    await handleSubmit(undefined, aiTicketDraft);
+                    setAiTicketFormOpen(false);
+                    setAiFlow({ activeIntent: undefined, stepIndex: 0, sage: undefined, slots: {}, ticketDraft: undefined });
+                    pushAiMessage("", "Ticket submitted to IT.", undefined);
+                  }}
+                >
+                  Send to IT
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {updateAvailable && (
+          <div className="status status-info update-banner">
+            <div>
+              Update available: v{updateAvailable.version}
+              {updateAvailable.notes ? (
+                <span className="update-notes">
+                  {" "}
+                  · {updateAvailable.notes.substring(0, 120)}
+                  {updateAvailable.notes.length > 120 ? "..." : ""}
+                </span>
+              ) : null}
+            </div>
+            <div className="update-actions">
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={handleInstallUpdate}
+                disabled={updateInstalling}
+              >
+                {updateInstalling ? "Installing…" : "Install update"}
+              </button>
+            </div>
+          </div>
+        )}
+        {updateError && (
+          <div className="status status-error update-banner">
+            {updateError}
+          </div>
+        )}
+
         <footer className="shell-footer">
           <span>Golpac LLC</span>
           <span className="dot">•</span>
           <span>For urgent issues call: 888-585-0271</span>
+          <span className="dot">•</span>
+          <button
+            type="button"
+            className="update-check-btn"
+            onClick={() => performUpdateCheck(true)}
+            disabled={updateChecking || updateInstalling}
+          >
+            {updateChecking ? "Checking updates…" : "Check for updates"}
+          </button>
         </footer>
       </div>
       {(showOfflineDialog && !offlineDismissed) && (
