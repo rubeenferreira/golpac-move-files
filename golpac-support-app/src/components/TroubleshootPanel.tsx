@@ -4,6 +4,12 @@ export type PingPanelState = {
   status: "idle" | "loading" | "success" | "error";
   message?: string;
   details?: string | null;
+  result?: {
+    average_ms?: number | null;
+    target?: string;
+    responses?: number;
+    attempts?: number;
+  };
 };
 
 type TroubleshootPanelProps = {
@@ -19,6 +25,9 @@ type TroubleshootPanelProps = {
     loading: boolean;
     items: { name: string; running: boolean; lastScan?: string | null }[];
   };
+  onLaunchAntivirus?: (name: string) => void;
+  driverState: PingPanelState;
+  onDriverCheck: () => void;
 };
 
 export function TroubleshootPanel({
@@ -31,9 +40,13 @@ export function TroubleshootPanel({
   showVpnDetails,
   onToggleVpnDetails,
   antivirus,
+  onLaunchAntivirus,
+  driverState,
+  onDriverCheck,
 }: TroubleshootPanelProps) {
   const isPingLoading = pingState.status === "loading";
   const isVpnLoading = vpnState.status === "loading";
+  const isDriverLoading = driverState.status === "loading";
   return (
     <div className="troubleshoot-panel">
       <div className="troubleshoot-card">
@@ -112,6 +125,49 @@ export function TroubleshootPanel({
       </div>
 
       <div className="troubleshoot-card">
+        <h2>Drivers</h2>
+        <p>Quick scan for very old drivers.</p>
+        <div className="troubleshoot-buttons">
+          <button
+            type="button"
+            className="secondary-btn wide"
+            onClick={onDriverCheck}
+            disabled={isDriverLoading}
+          >
+            <span className="icon">🔧</span>
+            {isDriverLoading ? (
+              <>
+                Checking drivers…
+                <span className="inline-spinner" aria-hidden />
+              </>
+            ) : (
+              "Check outdated drivers"
+            )}
+          </button>
+        </div>
+
+        {driverState.status !== "idle" && (
+          <div className={`ping-result ${driverState.status}`}>
+            <p>{driverState.message}</p>
+            {driverState.details && (
+              <pre className="ping-details">{driverState.details}</pre>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="troubleshoot-card">
+        <h2>Azure BitLocker</h2>
+        <p>Checks whether BitLocker keys are escrowed to Azure AD/Intune.</p>
+        <div className="ping-result">
+          <p>
+            This check isn't available from the app. If you need to confirm Azure BitLocker escrow status,
+            please submit a ticket or call Golpac IT.
+          </p>
+        </div>
+      </div>
+
+      <div className="troubleshoot-card">
         <h2>Antivirus status</h2>
         {antivirus.loading ? (
           <div className="ping-result">
@@ -132,6 +188,15 @@ export function TroubleshootPanel({
                     {item.running ? "Running" : "Not running"}
                   </span>
                 </div>
+                {!item.running && onLaunchAntivirus && (
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => onLaunchAntivirus(item.name)}
+                  >
+                    Launch {item.name}
+                  </button>
+                )}
               </div>
             ))}
           </div>

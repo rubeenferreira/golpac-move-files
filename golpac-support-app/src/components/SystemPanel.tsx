@@ -7,6 +7,13 @@ type DiskMetric = {
   free_gb: number;
 };
 
+type BitlockerVolume = {
+  volume: string;
+  protection_status?: string;
+  lock_status?: string;
+  encryption_percentage?: number | null;
+};
+
 type MetricsShape = {
   free_disk_c_gb: number;
   total_disk_c_gb: number;
@@ -21,6 +28,7 @@ type MetricsShape = {
   gateway_ping_ms?: number | null;
   public_ip?: string | null;
   disks?: DiskMetric[];
+  bitlocker?: BitlockerVolume[];
 };
 
 type SystemInfoShape = {
@@ -186,6 +194,40 @@ export function SystemPanel({ metrics, info, onRefresh, reloading }: SystemPanel
           </div>
         )}
       </div>
+
+      {metrics?.bitlocker && metrics.bitlocker.length > 0 && (
+        <div className="system-card">
+          <h2>BitLocker</h2>
+          <p>Encryption status for detected volumes.</p>
+          <div className="bitlocker-grid">
+            {metrics.bitlocker.map((vol) => (
+              <div key={vol.volume} className="bitlocker-card">
+                <div className="bitlocker-header">
+                  <strong>{vol.volume || "Unknown volume"}</strong>
+                </div>
+                <div className="bitlocker-row">
+                  <span>Protection</span>
+                  <span className="value">
+                    {vol.protection_status || "Unknown"}
+                  </span>
+                </div>
+                <div className="bitlocker-row">
+                  <span>Lock</span>
+                  <span className="value">{vol.lock_status || "Unknown"}</span>
+                </div>
+                {vol.encryption_percentage != null && (
+                  <div className="bitlocker-row">
+                    <span>Encrypted</span>
+                    <span className="value">
+                      {vol.encryption_percentage.toFixed(1)}%
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

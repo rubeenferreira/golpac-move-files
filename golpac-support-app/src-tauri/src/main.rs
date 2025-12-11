@@ -6,11 +6,12 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, sync::Mutex};
+
+#[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
-    collections::HashMap,
-    fs,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
-    path::Path,
     process::Command,
     thread::sleep,
     time::Duration,
@@ -18,18 +19,15 @@ use std::{
 use sysinfo::{CpuExt, DiskExt, System, SystemExt};
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartManagerExt};
-#[cfg(target_os = "windows")]
-use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "windows")]
 use arboard::Clipboard;
 #[cfg(target_os = "windows")]
-use std::{
-    env,
-    os::windows::process::CommandExt,
-    path::PathBuf,
-    time::Instant,
-};
+use serde_json::Value;
+#[cfg(target_os = "windows")]
+use std::path::Path;
+#[cfg(target_os = "windows")]
+use std::{env, fs, os::windows::process::CommandExt, path::PathBuf, time::Instant};
 #[cfg(target_os = "windows")]
 use tauri::{menu::MenuBuilder, tray::TrayIconBuilder, App};
 #[cfg(target_os = "windows")]
@@ -60,7 +58,9 @@ const TRAY_MENU_ID_TROUBLESHOOT: &str = "golpac-tray-troubleshoot";
 #[cfg(target_os = "windows")]
 const TRAY_MENU_ID_SYSTEM: &str = "golpac-tray-system";
 #[cfg(target_os = "windows")]
-const TRAY_MENU_ID_QUIT: &str = "golpac-tray-quit";
+const TRAY_MENU_ID_AI: &str = "golpac-tray-ai";
+#[cfg(target_os = "windows")]
+const TRAY_MENU_ID_HISTORY: &str = "golpac-tray-history";
 #[cfg(target_os = "windows")]
 const TRAY_TOOLTIP: &str = "Golpac Support";
 #[cfg(target_os = "windows")]
@@ -73,7 +73,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(target_os = "windows")]
 const STILL_CAPTURE_INTERVAL_SECS: u64 = 15;
 #[cfg(target_os = "windows")]
-const STILL_MAX_TOTAL_BYTES: u64 = 1_000_000_000;
+const STILL_MAX_TOTAL_BYTES: u64 = 1_000_000_000; // ~1 GB cap for local storage
 #[cfg(target_os = "windows")]
 const STILL_MAX_RETENTION_HOURS: u64 = 48;
 #[cfg(target_os = "windows")]
@@ -95,6 +95,59 @@ struct SystemInfo {
     ipv4: String,
     domain: Option<String>,
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+struct ProcessCpuSample {
+    #[serde(rename = "name")]
+    process_name: String,
+    #[serde(rename = "cpuSeconds")]
+    cpu_seconds: f64,
+}
+
+#[cfg(target_os = "windows")]
+struct ForegroundTracker {
+    usage_sec: HashMap<String, u64>,
+    web_sec: HashMap<String, u64>,
+    web_visits: HashMap<String, i64>,
+    current_domain: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct WebUsageEntry {
+    domain: String,
+    #[serde(rename = "usageMinutes")]
+    usage_minutes: f64,
+    #[serde(rename = "visitCount")]
+    visit_count: i64,
+    category: String,
+}
+
+#[derive(Serialize)]
+struct UsageSnapshot {
+    #[serde(rename = "appUsage")]
+    app_usage: Vec<AppUsageWithColor>,
+    #[serde(rename = "webUsage")]
+    web_usage: Vec<WebUsageEntry>,
+}
+
+#[derive(Serialize)]
+struct AppUsageWithColor {
+    name: String,
+    #[serde(rename = "usageMinutes")]
+    usage_minutes: f64,
+    percentage: f64,
+    color: String,
+}
+
+#[cfg(target_os = "windows")]
+static FOREGROUND_TRACKER: Lazy<Mutex<ForegroundTracker>> = Lazy::new(|| {
+    Mutex::new(ForegroundTracker {
+        usage_sec: HashMap::new(),
+        web_sec: HashMap::new(),
+        web_visits: HashMap::new(),
+        current_domain: None,
+    })
+});
 
 #[derive(Serialize, Clone, Default)]
 struct DiskSnapshot {
@@ -119,6 +172,8 @@ struct SystemMetrics {
     timestamp: String,
     disks: Vec<DiskSnapshot>,
     cpu_brand: Option<String>,
+    #[cfg(target_os = "windows")]
+    bitlocker: Vec<BitlockerVolume>,
 }
 
 #[derive(Serialize)]
@@ -135,11 +190,33 @@ struct VpnStatus {
     timestamp: String,
 }
 
+#[derive(Serialize, Default)]
+struct DriverEntry {
+    device: String,
+    version: String,
+    date: String,
+}
+
+#[derive(Serialize, Default)]
+struct DriverStatus {
+    outdated_count: usize,
+    sample: Vec<DriverEntry>,
+    raw: Option<String>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct AvProduct {
     name: String,
     running: bool,
     last_scan: Option<String>,
+}
+
+#[derive(Serialize, Clone, Default)]
+struct BitlockerVolume {
+    volume: String,
+    protection_status: String,
+    lock_status: String,
+    encryption_percentage: Option<f64>,
 }
 #[derive(Serialize)]
 struct PingSummary {
@@ -177,6 +254,230 @@ fn get_system_info() -> SystemInfo {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn map_bitlocker_status(code: Option<u32>) -> String {
+    match code {
+        Some(0) => "Off".to_string(),
+        Some(1) => "On".to_string(),
+        Some(2) => "Unknown".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn map_bitlocker_lock(code: Option<u32>) -> String {
+    match code {
+        Some(0) => "Unlocked".to_string(),
+        Some(1) => "Locked".to_string(),
+        _ => "Unknown".to_string(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_bitlocker_status() -> Vec<BitlockerVolume> {
+    #[derive(Deserialize)]
+    struct RawVolume {
+        #[serde(rename = "MountPoint")]
+        mount_point: Option<String>,
+        #[serde(rename = "ProtectionStatus")]
+        protection_status: Option<u32>,
+        #[serde(rename = "LockStatus")]
+        lock_status: Option<u32>,
+        #[serde(rename = "EncryptionPercentage")]
+        encryption_percentage: Option<f64>,
+    }
+
+    let output = Command::new("powershell")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-BitLockerVolume | Select-Object MountPoint,ProtectionStatus,LockStatus,EncryptionPercentage | ConvertTo-Json",
+        ])
+        .output();
+
+    let Ok(out) = output else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let parsed: Result<Vec<RawVolume>, _> = serde_json::from_str(&text);
+    let volumes: Vec<RawVolume> = match parsed {
+        Ok(list) => list,
+        Err(_) => {
+            // Sometimes PowerShell returns a single object instead of an array.
+            if let Ok(single) = serde_json::from_str::<RawVolume>(&text) {
+                vec![single]
+            } else {
+                Vec::new()
+            }
+        }
+    };
+
+    volumes
+        .into_iter()
+        .map(|v| BitlockerVolume {
+            volume: v.mount_point.unwrap_or_else(|| "Unknown".to_string()),
+            protection_status: map_bitlocker_status(v.protection_status),
+            lock_status: map_bitlocker_lock(v.lock_status),
+            encryption_percentage: v.encryption_percentage,
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_bitlocker_status() -> Vec<BitlockerVolume> {
+    Vec::new()
+}
+
+#[cfg(target_os = "windows")]
+fn launch_antivirus_impl(product: String) -> Result<(), String> {
+    let name = product.to_lowercase();
+    let mut candidates: Vec<&str> = Vec::new();
+    if name.contains("webroot") {
+        candidates.push(r"C:\Program Files\Webroot\WRSA.exe");
+        candidates.push(r"C:\Program Files (x86)\Webroot\WRSA.exe");
+    } else if name.contains("malwarebytes") {
+        candidates.push(r"C:\Program Files\Malwarebytes\Anti-Malware\mbam.exe");
+        candidates.push(r"C:\Program Files\Malwarebytes\Anti-Malware\MBAMService.exe");
+    } else if name.contains("checkpoint") || name.contains("check point") {
+        candidates
+            .push(r"C:\Program Files (x86)\CheckPoint\Endpoint Security\Endpoint Connect\trac.exe");
+    }
+    // last resort try raw
+    candidates.push(&product);
+
+    for path in candidates {
+        let cmd_path = Path::new(path);
+        let target = if cmd_path.exists() {
+            cmd_path.to_path_buf()
+        } else {
+            PathBuf::from(path)
+        };
+        let result = Command::new(target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn();
+        if result.is_ok() {
+            return Ok(());
+        }
+    }
+
+    Err("Could not launch antivirus process".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn launch_antivirus_impl(_product: String) -> Result<(), String> {
+    Err("Launching antivirus is only supported on Windows.".to_string())
+}
+
+#[tauri::command]
+fn get_driver_status() -> Result<DriverStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+          $cutoff = (Get-Date).AddYears(-3)
+          Get-WmiObject Win32_PnPSignedDriver |
+            Where-Object { $_.DriverDate -lt $cutoff } |
+            Select-Object DeviceName, Description, DriverProviderName, DriverVersion, DriverDate |
+            ConvertTo-Json -Depth 2
+        "#;
+
+        let output = Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["-NoProfile", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to run PowerShell: {e}"))?;
+
+        if !output.status.success() {
+            return Err("Could not check drivers".to_string());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let parsed: serde_json::Result<serde_json::Value> = serde_json::from_str(&stdout);
+
+        let mut entries: Vec<DriverEntry> = Vec::new();
+        if let Ok(val) = parsed.as_ref() {
+            match val {
+                serde_json::Value::Array(arr) => {
+                    for item in arr.iter().take(5) {
+                        let device_name = item.get("DeviceName").and_then(|v| v.as_str());
+                        let description = item.get("Description").and_then(|v| v.as_str());
+                        let provider = item.get("DriverProviderName").and_then(|v| v.as_str());
+                        let device = device_name
+                            .filter(|s| !s.is_empty() && *s != "Unknown")
+                            .or(description.filter(|s| !s.is_empty()))
+                            .or(provider.filter(|s| !s.is_empty()))
+                            .unwrap_or("Unknown")
+                            .to_string();
+                        let version = item
+                            .get("DriverVersion")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let date = item
+                            .get("DriverDate")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        entries.push(DriverEntry {
+                            device,
+                            version,
+                            date,
+                        });
+                    }
+                }
+                serde_json::Value::Object(obj) => {
+                    let device_name = obj.get("DeviceName").and_then(|v| v.as_str());
+                    let description = obj.get("Description").and_then(|v| v.as_str());
+                    let provider = obj.get("DriverProviderName").and_then(|v| v.as_str());
+                    let device = device_name
+                        .filter(|s| !s.is_empty() && *s != "Unknown")
+                        .or(description.filter(|s| !s.is_empty()))
+                        .or(provider.filter(|s| !s.is_empty()))
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    let version = obj
+                        .get("DriverVersion")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let date = obj
+                        .get("DriverDate")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    entries.push(DriverEntry {
+                        device,
+                        version,
+                        date,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let count = parsed
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_array().map(|a| a.len()))
+            .unwrap_or_else(|| if entries.is_empty() { 0 } else { 1 });
+
+        Ok(DriverStatus {
+            outdated_count: count,
+            sample: entries,
+            raw: Some(stdout),
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Driver check is only supported on Windows.".to_string())
+    }
+}
+
 //
 // ───────── Printer info ─────────
 //
@@ -196,14 +497,7 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
 
     unsafe {
         // First call to determine required buffer size (it will return ERROR_INSUFFICIENT_BUFFER).
-        let _ = EnumPrintersW(
-            flags,
-            PCWSTR::null(),
-            2,
-            None,
-            &mut needed,
-            &mut returned,
-        );
+        let _ = EnumPrintersW(flags, PCWSTR::null(), 2, None, &mut needed, &mut returned);
 
         if needed == 0 {
             return Ok(Vec::new());
@@ -231,9 +525,9 @@ fn get_printers_impl() -> Result<Vec<PrinterInfo>, String> {
                 let name = pwstr_to_string(info.pPrinterName)?;
                 let port_name = pwstr_to_string(info.pPortName);
 
-                let ip = port_name.as_ref().and_then(|port| {
-                    parse_ip_candidate(port).or_else(|| Some(port.clone()))
-                });
+                let ip = port_name
+                    .as_ref()
+                    .and_then(|port| parse_ip_candidate(port).or_else(|| Some(port.clone())));
 
                 Some(PrinterInfo {
                     name,
@@ -299,7 +593,10 @@ fn format_status(status: u32) -> String {
     }
 
     push_if!(status & PRINTER_STATUS_PAUSED != 0, "Paused");
-    push_if!(status & PRINTER_STATUS_PENDING_DELETION != 0, "Pending Deletion");
+    push_if!(
+        status & PRINTER_STATUS_PENDING_DELETION != 0,
+        "Pending Deletion"
+    );
     push_if!(status & PRINTER_STATUS_PAPER_PROBLEM != 0, "Paper Problem");
     push_if!(status & PRINTER_STATUS_MANUAL_FEED != 0, "Manual Feed");
     push_if!(status & PRINTER_STATUS_PAPER_JAM != 0, "Paper Jam");
@@ -314,7 +611,10 @@ fn format_status(status: u32) -> String {
     push_if!(status & PRINTER_STATUS_OUT_OF_MEMORY != 0, "Out of Memory");
     push_if!(status & PRINTER_STATUS_NO_TONER != 0, "No Toner");
     push_if!(status & PRINTER_STATUS_TONER_LOW != 0, "Toner Low");
-    push_if!(status & PRINTER_STATUS_OUTPUT_BIN_FULL != 0, "Output Bin Full");
+    push_if!(
+        status & PRINTER_STATUS_OUTPUT_BIN_FULL != 0,
+        "Output Bin Full"
+    );
     push_if!(status & PRINTER_STATUS_WAITING != 0, "Waiting");
     push_if!(status & PRINTER_STATUS_WARMING_UP != 0, "Warming Up");
     push_if!(status & PRINTER_STATUS_POWER_SAVE != 0, "Power Save");
@@ -322,8 +622,14 @@ fn format_status(status: u32) -> String {
         status & PRINTER_STATUS_SERVER_UNKNOWN != 0,
         "Server Unknown"
     );
-    push_if!(status & PRINTER_STATUS_SERVER_OFFLINE != 0, "Server Offline");
-    push_if!(status & PRINTER_STATUS_USER_INTERVENTION != 0, "User Action");
+    push_if!(
+        status & PRINTER_STATUS_SERVER_OFFLINE != 0,
+        "Server Offline"
+    );
+    push_if!(
+        status & PRINTER_STATUS_USER_INTERVENTION != 0,
+        "User Action"
+    );
     push_if!(
         status & PRINTER_STATUS_DRIVER_UPDATE_NEEDED != 0,
         "Driver Update Needed"
@@ -451,7 +757,8 @@ fn capture_screenshot_windows(window: tauri::Window) -> Result<String, String> {
         wait_for_clipboard_image(&mut clipboard, Duration::from_secs(30))?
     };
 
-    let width = u32::try_from(image.width).map_err(|_| "Screenshot width unsupported".to_string())?;
+    let width =
+        u32::try_from(image.width).map_err(|_| "Screenshot width unsupported".to_string())?;
     let height =
         u32::try_from(image.height).map_err(|_| "Screenshot height unsupported".to_string())?;
     let encoded = encode_png_from_rgba(image.bytes.as_ref(), width, height)?;
@@ -499,61 +806,6 @@ fn restore_window(window: &tauri::Window) {
 }
 
 #[cfg(target_os = "windows")]
-fn slugify_label(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else {
-            out.push('_');
-        }
-    }
-    let trimmed = out.trim_matches('_');
-    if trimmed.is_empty() {
-        "capture".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn is_browser_process(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    TARGET_BROWSERS.iter().any(|b| lower == *b || lower.contains(*b))
-}
-
-#[cfg(target_os = "windows")]
-fn detect_target_context(process: &str, title: &str, domain_regex: &Regex) -> Option<String> {
-    let proc_lower = process.to_lowercase();
-    let title_lower = title.to_lowercase();
-
-    if TARGET_SAGE_KEYWORDS
-        .iter()
-        .any(|key| proc_lower.contains(key) || title_lower.contains(key))
-    {
-        return Some("sage300".to_string());
-    }
-
-    if is_browser_process(&proc_lower) {
-        if let Some(cap) = domain_regex
-            .captures(&title_lower)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string())
-        {
-            if TARGET_DOMAIN_KEYWORDS.iter().any(|domain| cap.contains(domain)) {
-                return Some("coretechsolutions.app".to_string());
-            }
-        }
-
-        if TARGET_DOMAIN_KEYWORDS.iter().any(|domain| title_lower.contains(domain)) {
-            return Some("coretechsolutions.app".to_string());
-        }
-    }
-
-    None
-}
-
-#[cfg(target_os = "windows")]
 fn capture_primary_screen_png() -> Result<Vec<u8>, String> {
     use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
     use screenshots::Screen;
@@ -578,6 +830,69 @@ fn capture_primary_screen_png() -> Result<Vec<u8>, String> {
     }
 
     Ok(png_bytes)
+}
+
+#[cfg(target_os = "windows")]
+fn slugify_label(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "capture".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_browser_process(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    TARGET_BROWSERS
+        .iter()
+        .any(|b| lower == *b || lower.contains(*b))
+}
+
+#[cfg(target_os = "windows")]
+fn detect_target_context(process: &str, title: &str, domain_regex: &Regex) -> Option<String> {
+    let proc_lower = process.to_lowercase();
+    let title_lower = title.to_lowercase();
+
+    if TARGET_SAGE_KEYWORDS
+        .iter()
+        .any(|key| proc_lower.contains(key) || title_lower.contains(key))
+    {
+        return Some("sage300".to_string());
+    }
+
+    if is_browser_process(&proc_lower) {
+        if let Some(cap) = domain_regex
+            .captures(&title_lower)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+        {
+            if TARGET_DOMAIN_KEYWORDS
+                .iter()
+                .any(|domain| cap.contains(domain))
+            {
+                return Some("coretechsolutions.app".to_string());
+            }
+        }
+
+        if TARGET_DOMAIN_KEYWORDS
+            .iter()
+            .any(|domain| title_lower.contains(domain))
+        {
+            return Some("coretechsolutions.app".to_string());
+        }
+    }
+
+    None
 }
 
 #[cfg(target_os = "windows")]
@@ -615,8 +930,8 @@ fn capture_and_store_still(
 fn prune_recordings(dir: &Path, max_total_bytes: u64, max_age_hours: u64) {
     struct Group {
         stem: String,
-        png: Option<(std::path::PathBuf, std::fs::Metadata)>,
-        json: Option<(std::path::PathBuf, std::fs::Metadata)>,
+        png: Option<(PathBuf, std::fs::Metadata)>,
+        json: Option<(PathBuf, std::fs::Metadata)>,
         size: u64,
         modified: std::time::SystemTime,
     }
@@ -676,13 +991,17 @@ fn prune_recordings(dir: &Path, max_total_bytes: u64, max_age_hours: u64) {
         }
     }
 
-    for group_name in groups
+    // Remove groups past retention
+    for group in groups
         .values()
-        .filter(|g| now.duration_since(g.modified).map(|age| age > max_age).unwrap_or(false))
+        .filter(|g| {
+            let modified = g.modified;
+            now.duration_since(modified).map(|age| age > max_age).unwrap_or(false)
+        })
         .map(|g| g.stem.clone())
         .collect::<Vec<_>>()
     {
-        if let Some(g) = groups.remove(&group_name) {
+        if let Some(g) = groups.remove(&group) {
             if let Some((p, _)) = g.png {
                 let _ = fs::remove_file(&p);
             }
@@ -704,11 +1023,11 @@ fn prune_recordings(dir: &Path, max_total_bytes: u64, max_age_hours: u64) {
         if total <= max_total_bytes {
             break;
         }
-        if let Some((p, _)) = &grp.png {
-            let _ = fs::remove_file(p);
+        if let Some(png) = &grp.png {
+            let _ = fs::remove_file(&png.0);
         }
-        if let Some((j, _)) = &grp.json {
-            let _ = fs::remove_file(j);
+        if let Some(json) = &grp.json {
+            let _ = fs::remove_file(&json.0);
         }
         total = total.saturating_sub(grp.size);
         eprintln!("Pruned old recording group: {}", stem);
@@ -720,7 +1039,9 @@ static STILL_MONITOR_STARTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(fa
 
 #[cfg(target_os = "windows")]
 fn start_target_still_monitor(app: &AppHandle) {
-    if STILL_MONITOR_STARTED.swap(true, Ordering::SeqCst) {
+    if STILL_MONITOR_STARTED
+        .swap(true, Ordering::SeqCst)
+    {
         return;
     }
 
@@ -729,15 +1050,15 @@ fn start_target_still_monitor(app: &AppHandle) {
         let base_dir = app_handle
             .path()
             .app_local_data_dir()
-            .unwrap_or_else(|_| std::env::temp_dir())
+            .unwrap_or_else(|| std::env::temp_dir())
             .join("recordings");
 
         let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
             .unwrap_or_else(|_| Regex::new("").unwrap());
 
-        let mut last_capture = std::time::Instant::now()
+        let mut last_capture = Instant::now()
             .checked_sub(Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS))
-            .unwrap_or_else(std::time::Instant::now);
+            .unwrap_or_else(Instant::now);
         let mut last_reason: Option<String> = None;
 
         loop {
@@ -753,10 +1074,12 @@ fn start_target_still_monitor(app: &AppHandle) {
                     || last_reason.as_deref() != Some(r.as_str());
 
                 if needs_capture {
-                    if let Err(err) = capture_and_store_still(&base_dir, &r, &proc_raw, &title_raw) {
+                    if let Err(err) =
+                        capture_and_store_still(&base_dir, &r, &proc_raw, &title_raw)
+                    {
                         eprintln!("Still capture failed: {err}");
                     } else {
-                        last_capture = std::time::Instant::now();
+                        last_capture = Instant::now();
                         last_reason = Some(r);
                     }
                 }
@@ -834,16 +1157,8 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
             free_disk_c = bytes_to_gb(disk.available_space());
             total_disk_c = bytes_to_gb(disk.total_space());
         }
-        let name = disk
-            .name()
-            .to_string_lossy()
-            .trim()
-            .to_string();
-        let label = if name.is_empty() {
-            mount.clone()
-        } else {
-            name
-        };
+        let name = disk.name().to_string_lossy().trim().to_string();
+        let label = if name.is_empty() { mount.clone() } else { name };
 
         disks.push(DiskSnapshot {
             name: label,
@@ -854,11 +1169,7 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
     }
 
     let cpu_usage = system.global_cpu_info().cpu_usage();
-    let cpu_brand = system
-        .global_cpu_info()
-        .brand()
-        .trim()
-        .to_string();
+    let cpu_brand = system.global_cpu_info().brand().trim().to_string();
     let cpu_brand = if cpu_brand.is_empty() {
         None
     } else {
@@ -871,14 +1182,15 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
     let memory_used_gb = kib_to_gb(used_mem);
 
     let gateway = default_gateway();
-    let ping = gateway
-        .as_ref()
-        .and_then(|g| ping_gateway(g));
+    let ping = gateway.as_ref().and_then(|g| ping_gateway(g));
 
     let public_ip = std::thread::spawn(fetch_public_ip)
         .join()
         .ok()
         .and_then(|r| r);
+
+    #[cfg(target_os = "windows")]
+    let bitlocker = get_bitlocker_status();
 
     Ok(SystemMetrics {
         uptime_seconds: uptime,
@@ -894,6 +1206,8 @@ fn get_system_metrics() -> Result<SystemMetrics, String> {
         timestamp: Utc::now().to_rfc3339(),
         disks,
         cpu_brand,
+        #[cfg(target_os = "windows")]
+        bitlocker,
     })
 }
 
@@ -910,10 +1224,7 @@ fn get_app_context(category: String) -> Result<AppContextInfo, String> {
         _ => None,
     };
 
-    Ok(AppContextInfo {
-        category,
-        details,
-    })
+    Ok(AppContextInfo { category, details })
 }
 
 #[tauri::command]
@@ -1010,8 +1321,14 @@ if ($vpn) {
         }
 
         let mut parts = stdout.splitn(2, '|');
-        let name = parts.next().map(|s| s.to_string()).filter(|s| !s.is_empty());
-        let ip = parts.next().map(|s| s.to_string()).filter(|s| !s.is_empty());
+        let name = parts
+            .next()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+        let ip = parts
+            .next()
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
 
         Ok(VpnStatus {
             active: true,
@@ -1066,6 +1383,11 @@ fn launch_quick_assist() -> Result<(), String> {
     {
         Err("Quick Assist is only available on Windows devices.".to_string())
     }
+}
+
+#[tauri::command]
+fn launch_antivirus(product: String) -> Result<(), String> {
+    launch_antivirus_impl(product)
 }
 
 #[cfg(target_os = "windows")]
@@ -1155,7 +1477,13 @@ $route = Get-NetRoute -DestinationPrefix 0.0.0.0/0 | Sort-Object RouteMetric | S
 if ($route) { $route.NextHop }
 "#;
     Command::new("powershell")
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script])
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()
@@ -1305,28 +1633,6 @@ if ($obj.Keys.Count -gt 0) {
     powershell_output(script)
 }
 
-
-#[cfg(target_os = "windows")]
-fn get_foreground_process_with_title() -> Result<(String, String), String> {
-    let script = r#"
-Add-Type @"\nusing System;\nusing System.Runtime.InteropServices;\npublic class Win32 {\n    [DllImport("user32.dll")]\n    public static extern IntPtr GetForegroundWindow();\n    [DllImport("user32.dll")]\n    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);\n    [DllImport("user32.dll", CharSet=CharSet.Auto, SetLastError=true)]\n    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);\n}\n"@\n$hwnd = [Win32]::GetForegroundWindow()\nif ($hwnd -eq 0) { return }\n$pid = 0\n[Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null\n$titleBuilder = New-Object System.Text.StringBuilder 512\n[Win32]::GetWindowText($hwnd, $titleBuilder, $titleBuilder.Capacity) | Out-Null\n$title = $titleBuilder.ToString()\nif ($pid -ne 0) {\n  $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue\n  if ($proc) {\n    $proc.ProcessName\n    $title\n  }\n}\n    "#;
-
-    let output = powershell_output(script)?;
-    let mut lines = output.lines();
-    let proc_name = lines.next().unwrap_or_default().trim().to_string();
-    let title = lines.next().unwrap_or_default().trim().to_string();
-    if proc_name.is_empty() {
-        Err("No foreground window".to_string())
-    } else {
-        Ok((proc_name, title))
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn get_foreground_process_with_title() -> Result<(String, String), String> {
-    Err("Foreground process lookup only supported on Windows".to_string())
-}
-
 #[cfg(target_os = "windows")]
 fn powershell_output(script: &str) -> Result<String, String> {
     let output = Command::new("powershell")
@@ -1343,9 +1649,7 @@ fn powershell_output(script: &str) -> Result<String, String> {
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr)
-            .trim()
-            .to_string())
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
 
@@ -1383,10 +1687,22 @@ fn parse_ping_packets(output: &str) -> (u32, u32, Option<f64>) {
         if line.contains("packets transmitted") && line.contains("packet loss") {
             let parts: Vec<&str> = line.split(',').collect();
             if let Some(sent) = parts.get(0) {
-                attempts = sent.trim().split_whitespace().next().unwrap_or("0").parse().unwrap_or(0);
+                attempts = sent
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0);
             }
             if let Some(received) = parts.get(1) {
-                responses = received.trim().split_whitespace().next().unwrap_or("0").parse().unwrap_or(0);
+                responses = received
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0);
             }
             if let Some(loss_part) = parts.iter().find(|p| p.contains("packet loss")) {
                 if let Some(percent) = loss_part.trim().split('%').next() {
@@ -1432,8 +1748,9 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
     let tray_menu = MenuBuilder::new(app)
         .text(TRAY_MENU_ID_HOME, "Home")
         .text(TRAY_MENU_ID_TROUBLESHOOT, "Troubleshoot")
+        .text(TRAY_MENU_ID_AI, "Golpac AI (Beta)")
+        .text(TRAY_MENU_ID_HISTORY, "Ticket History")
         .text(TRAY_MENU_ID_SYSTEM, "System")
-        .text(TRAY_MENU_ID_QUIT, "Quit Golpac Support")
         .build()?;
 
     let mut tray_builder = TrayIconBuilder::with_id(TRAY_ICON_ID)
@@ -1448,11 +1765,18 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
                 reveal_main_window(app_handle);
                 emit_tray_navigation(app_handle, "troubleshoot");
             }
+            TRAY_MENU_ID_AI => {
+                reveal_main_window(app_handle);
+                emit_tray_navigation(app_handle, "ai");
+            }
+            TRAY_MENU_ID_HISTORY => {
+                reveal_main_window(app_handle);
+                emit_tray_navigation(app_handle, "history");
+            }
             TRAY_MENU_ID_SYSTEM => {
                 reveal_main_window(app_handle);
                 emit_tray_navigation(app_handle, "system");
             }
-            TRAY_MENU_ID_QUIT => app_handle.exit(0),
             _ => {}
         });
 
@@ -1464,20 +1788,487 @@ fn setup_windows_tray(app: &mut App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+fn read_ticket_history(app_handle: tauri::AppHandle, filename: String) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut path = app_handle
+            .path()
+            .app_data_dir()
+            .map_err(|_| "No app data dir".to_string())?;
+        path.push(filename);
+        return fs::read_to_string(&path).map_err(|e| e.to_string());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Not supported on this OS".to_string())
+    }
+}
+
+#[tauri::command]
+fn write_ticket_history(
+    app_handle: tauri::AppHandle,
+    filename: String,
+    contents: String,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut path = app_handle
+            .path()
+            .app_data_dir()
+            .map_err(|_| "No app data dir".to_string())?;
+        path.push(filename);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(&path, contents).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Not supported on this OS".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_powershell_json(script: &str) -> Result<Value, String> {
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<Value>(&stdout).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn run_powershell_text(script: &str) -> Result<String, String> {
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-Command", script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "PowerShell failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_process_name(raw: &str) -> Option<String> {
+    let lower = raw
+        .trim_matches('"')
+        .trim()
+        .trim_end_matches(".exe")
+        .to_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    if lower == "steam" || lower == "steamwebhelper" {
+        return Some("Steam".to_string());
+    }
+    if lower.contains("smartpss") {
+        return Some("SmartPSS".to_string());
+    }
+    // Allowlist some helper names before service filtering
+    if lower == "steam" || lower == "steamwebhelper" {
+        return Some("Steam".to_string());
+    }
+    if lower == "smartpss" || lower == "smartpssclient" {
+        return Some("SmartPSS".to_string());
+    }
+    let ignored_exact = [
+        "system",
+        "idle",
+        "svchost",
+        "dllhost",
+        "smartscreen",
+        "csrss",
+        "wininit",
+        "winlogon",
+        "fontdrvhost",
+        "lsass",
+        "services",
+        "explorer",
+        "registry",
+        "ctfmon",
+        "audiodg",
+        "dwm",
+        "aackingstondramhal_x86",
+        "aac3572mbhal_x86",
+        "adobecollabsync",
+        "armourysocketserver",
+        "acpowernotification",
+        "appactions",
+    ];
+    if ignored_exact.contains(&lower.as_str()) {
+        return None;
+    }
+
+    let friendly: String = match lower.as_str() {
+        "chrome" => "Chrome".to_string(),
+        "msedge" => "Edge".to_string(),
+        "brave" => "Brave".to_string(),
+        "firefox" => "Firefox".to_string(),
+        "outlook" => "Outlook".to_string(),
+        "teams" => "Microsoft Teams".to_string(),
+        "excel" => "Excel".to_string(),
+        "winword" | "word" => "Word".to_string(),
+        "powerpnt" => "PowerPoint".to_string(),
+        "slack" => "Slack".to_string(),
+        "zoom" => "Zoom".to_string(),
+        "onedrive" => "OneDrive".to_string(),
+        "spotify" => "Spotify".to_string(),
+        "remoting_desktop" => "Remote Desktop".to_string(),
+        "remoting_host" => "Remote Desktop Host".to_string(),
+        "msmpeng" => "Windows Defender".to_string(),
+        "acad" | "autocad" => "AutoCAD".to_string(),
+        "revit" => "Revit".to_string(),
+        "3dsmax" => "3ds Max".to_string(),
+        "maya" => "Maya".to_string(),
+        "blender" => "Blender".to_string(),
+        "photoshop" | "photoshopbeta" => "Photoshop".to_string(),
+        "illustrator" => "Illustrator".to_string(),
+        "indesign" => "InDesign".to_string(),
+        "premiere" | "premierepro" => "Premiere Pro".to_string(),
+        "afterfx" | "aftereffects" => "After Effects".to_string(),
+        "lightroom" => "Lightroom".to_string(),
+        "code" => "VS Code".to_string(),
+        "devenv" => "Visual Studio".to_string(),
+        "idea64" | "pycharm64" | "clion64" | "webstorm64" | "rider64" => {
+            "JetBrains IDE".to_string()
+        }
+        "androidstudio" => "Android Studio".to_string(),
+        "vmware" | "vmware-hostd" | "vmware-vmx" => "VMware".to_string(),
+        "virtualbox" => "VirtualBox".to_string(),
+        "anydesk" => "AnyDesk".to_string(),
+        "teamviewer" => "TeamViewer".to_string(),
+        "discord" => "Discord".to_string(),
+        other => {
+            if other.len() <= 2 {
+                return Some(raw.to_string());
+            }
+            let mut chars = other.chars();
+            if let Some(first) = chars.next() {
+                let title = first.to_uppercase().collect::<String>() + chars.as_str();
+                title
+            } else {
+                raw.to_string()
+            }
+        }
+    };
+    Some(friendly)
+}
+
+#[cfg(target_os = "windows")]
+fn build_app_usage() -> Vec<AppUsageWithColor> {
+    // Build from the 1s foreground tracker snapshot
+    let mut usage: Vec<AppUsageWithColor> = Vec::new();
+    let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+
+    if tracker.usage_sec.is_empty() {
+        return usage;
+    }
+
+    // Convert to minutes
+    let mut entries: Vec<(String, f64)> = tracker
+        .usage_sec
+        .iter()
+        .map(|(k, v)| (k.clone(), *v as f64 / 60.0))
+        .collect();
+
+    // Reset tracker for next window
+    tracker.usage_sec.clear();
+
+    let total: f64 = entries.iter().map(|(_, v)| *v).sum();
+    let palette = [
+        "#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#8b5cf6", "#3b82f6", "#ec4899", "#f97316",
+    ];
+
+    entries.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    entries.truncate(15);
+
+    for (idx, (name, minutes)) in entries.into_iter().enumerate() {
+        let pct = if total > 0.0 {
+            ((minutes / total) * 100.0 * 10.0).round() / 10.0
+        } else {
+            0.0
+        };
+        usage.push(AppUsageWithColor {
+            name,
+            usage_minutes: minutes,
+            percentage: pct,
+            color: palette[idx % palette.len()].to_string(),
+        });
+    }
+
+    usage
+}
+
+#[cfg(target_os = "windows")]
+fn get_foreground_process() -> Result<String, String> {
+    let script = r#"
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+"@
+
+$hwnd = [Win32]::GetForegroundWindow()
+$pid = 0
+[Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+        if ($pid -ne 0) { (Get-Process -Id $pid).ProcessName }
+    "#;
+    run_powershell_text(script)
+}
+
+#[cfg(target_os = "windows")]
+fn get_foreground_process_with_title() -> Result<(String, String), String> {
+    let script = r#"
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class Win32 {
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll", CharSet=CharSet.Auto, SetLastError=true)]
+    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+}
+"@
+$hwnd = [Win32]::GetForegroundWindow()
+if ($hwnd -eq 0) { return }
+$pid = 0
+[Win32]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+$titleBuilder = New-Object System.Text.StringBuilder 512
+[Win32]::GetWindowText($hwnd, $titleBuilder, $titleBuilder.Capacity) | Out-Null
+$title = $titleBuilder.ToString()
+if ($pid -ne 0) { 
+  $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+  if ($proc) { 
+    $proc.ProcessName
+    $title
+  }
+}
+    "#;
+    if let Ok(output) = run_powershell_json(script) {
+        if let Some(arr) = output.as_array() {
+            if arr.len() >= 2 {
+                let pname = arr[0].as_str().unwrap_or_default().to_string();
+                let title = arr[1].as_str().unwrap_or_default().to_string();
+                if !pname.is_empty() {
+                    return Ok((pname, title));
+                }
+            }
+        }
+    }
+    Err("No foreground window".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn is_idle_more_than(d: Duration) -> bool {
+    let script = r#"
+        Add-Type -AssemblyName System.Windows.Forms
+        $idleMs = [Environment]::TickCount64 - [System.Windows.Forms.SystemInformation]::LastInputTime
+        $idleMs
+    "#;
+    if let Ok(output) = run_powershell_text(script) {
+        if let Ok(ms) = output.trim().parse::<u128>() {
+            return Duration::from_millis(ms as u64) > d;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn tally_history_file(path: &Path, counts: &mut HashMap<String, i64>) {
+    if !path.exists() {
+        return;
+    }
+    let tmp_path = match path.file_name() {
+        Some(name) => {
+            let mut tmp = std::env::temp_dir();
+            tmp.push(format!("{}_snapshot", name.to_string_lossy()));
+            tmp
+        }
+        None => return,
+    };
+    if std::fs::copy(path, &tmp_path).is_err() {
+        return;
+    }
+    let data = std::fs::read(&tmp_path).unwrap_or_default();
+    let text = String::from_utf8_lossy(&data);
+    for segment in text.split("http") {
+        let seg = segment.trim_start_matches('s').trim_start_matches("://");
+        if seg.is_empty() {
+            continue;
+        }
+        let host_part = seg
+            .split(&['/', '"', '\'', ' ', '\n', '\r', '\t'][..])
+            .next()
+            .unwrap_or("");
+        if host_part.is_empty() || host_part.len() < 4 {
+            continue;
+        }
+        let host = host_part.trim_start_matches("www.");
+        if host.is_empty() {
+            continue;
+        }
+        *counts.entry(host.to_string()).or_insert(0) += 1;
+    }
+    let _ = std::fs::remove_file(tmp_path);
+}
+
+#[cfg(target_os = "windows")]
+fn build_web_usage() -> Vec<WebUsageEntry> {
+    let mut counts: HashMap<String, i64> = HashMap::new();
+    if let Ok(local) = env::var("LOCALAPPDATA") {
+        let chrome = Path::new(&local).join("Google/Chrome/User Data/Default/History");
+        let edge = Path::new(&local).join("Microsoft/Edge/User Data/Default/History");
+        let brave = Path::new(&local).join("BraveSoftware/Brave-Browser/User Data/Default/History");
+        tally_history_file(&chrome, &mut counts);
+        tally_history_file(&edge, &mut counts);
+        tally_history_file(&brave, &mut counts);
+    }
+
+    // Merge in DNS cache so visits reflect current browsing even if history isn't flushed yet
+    for entry in build_dns_web_usage() {
+        *counts.entry(entry.domain).or_insert(0) += entry.visit_count;
+    }
+
+    let mut items: Vec<(String, i64)> = counts.into_iter().collect();
+    items.sort_by(|a, b| b.1.cmp(&a.1));
+    items.truncate(8);
+
+    items
+        .into_iter()
+        .map(|(domain, visits)| WebUsageEntry {
+            domain,
+            usage_minutes: 0.0,
+            visit_count: visits,
+            category: "Browsing".to_string(),
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn build_dns_web_usage() -> Vec<WebUsageEntry> {
+    let script = r#"
+        $items = Get-DnsClientCache | Where-Object { $_.EntryType -eq 'Host' } |
+            Select-Object -ExpandProperty Name |
+            Group-Object |
+            Sort-Object -Property Count -Descending |
+            Select-Object -First 6 @{
+                Name = "domain"; Expression = { $_.Name }
+            }, @{
+                Name = "visits"; Expression = { $_.Count }
+            }, @{
+                Name = "category"; Expression = { "DNS" }
+            }
+        $items | ConvertTo-Json
+    "#;
+
+    let value = run_powershell_json(script).unwrap_or(Value::Null);
+    serde_json::from_value::<Vec<WebUsageEntry>>(value).unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_usage_snapshot() -> Result<UsageSnapshot, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Start foreground tracker thread once
+        static TRACKER_STARTED: Lazy<()> = Lazy::new(|| {
+            std::thread::spawn(|| {
+                let browser_procs = ["chrome", "msedge", "firefox", "brave"];
+                let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
+                    .unwrap_or_else(|_| Regex::new("").unwrap());
+                let mut last_domain: Option<String> = None;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if is_idle_more_than(Duration::from_secs(300)) {
+                        continue;
+                    }
+                    if let Ok((proc_raw, title)) = get_foreground_process_with_title() {
+                        if let Some(name) = normalize_process_name(&proc_raw) {
+                            let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+                            *tracker.usage_sec.entry(name.clone()).or_insert(0) += 1;
+
+                            if browser_procs.iter().any(|p| name.contains(p)) {
+                                if let Some(cap) = domain_regex
+                                    .captures(&title)
+                                    .and_then(|c| c.get(1))
+                                    .map(|m| m.as_str().to_lowercase())
+                                {
+                                    let domain = cap;
+                                    *tracker.web_sec.entry(domain.clone()).or_insert(0) += 1;
+                                    if last_domain.as_deref() != Some(&domain) {
+                                        *tracker.web_visits.entry(domain.clone()).or_insert(0) += 1;
+                                        last_domain = Some(domain);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        });
+        Lazy::force(&TRACKER_STARTED);
+
+        let app_usage = build_app_usage();
+        let mut tracker = FOREGROUND_TRACKER.lock().unwrap();
+        let web_usage: Vec<WebUsageEntry> = tracker
+            .web_sec
+            .iter()
+            .map(|(domain, secs)| WebUsageEntry {
+                domain: domain.clone(),
+                usage_minutes: (*secs as f64) / 60.0,
+                visit_count: *tracker.web_visits.get(domain).unwrap_or(&0),
+                category: "Browsing".to_string(),
+            })
+            .collect();
+        tracker.web_sec.clear();
+        tracker.web_visits.clear();
+
+        return Ok(UsageSnapshot {
+            app_usage,
+            web_usage,
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Usage snapshot not supported on this OS".to_string())
+    }
+}
+
 //
 // ───────── Tauri main ─────────
 //
 
 fn main() {
     let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(
-            |_app, _args, _cwd| {
-                #[cfg(target_os = "windows")]
-                {
-                    reveal_main_window(&_app);
-                }
-            },
-        ))
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
+            #[cfg(target_os = "windows")]
+            {
+                reveal_main_window(&_app);
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -1497,7 +2288,12 @@ fn main() {
             get_vpn_status,
             test_internet_connection,
             get_antivirus_status,
-            exit_application
+            launch_antivirus,
+            get_driver_status,
+            exit_application,
+            read_ticket_history,
+            write_ticket_history,
+            get_usage_snapshot
         ])
         .setup(|app| {
             if let Err(e) = app.autolaunch().enable() {
