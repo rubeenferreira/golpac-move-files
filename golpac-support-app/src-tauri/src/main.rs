@@ -1344,10 +1344,12 @@ fn start_video_uploader(app: &AppHandle) {
             .join("golpac-support-app")
             .join("recordings")
             .join("video");
+        let mut base_dir_source = "temp".to_string();
         if let Ok(app_dir) = app_handle.path().app_local_data_dir() {
             let candidate = app_dir.join("recordings").join("video");
-            if candidate.exists() {
+            if fs::create_dir_all(&candidate).is_ok() {
                 base_dir = candidate;
+                base_dir_source = "appdata".to_string();
             }
         }
 
@@ -1373,13 +1375,15 @@ fn start_video_uploader(app: &AppHandle) {
         log_path = maybe_log(
             &log_path,
             format!(
-                "using blob upload base {}; token source: {}",
+                "using blob upload base {}; token source: {}; watching dir {:?} ({})",
                 upload_base,
                 if std::env::var(BLOB_TOKEN_ENV).is_ok() {
                     "env"
                 } else {
                     "fallback"
-                }
+                },
+                base_dir,
+                base_dir_source
             ),
         );
 
