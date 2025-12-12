@@ -94,11 +94,13 @@ const VIDEO_HEIGHT: u32 = 720;
 #[cfg(target_os = "windows")]
 const VIDEO_BITRATE: &str = "1500k"; // ~1.5 Mbps target
 #[cfg(target_os = "windows")]
-const VIDEO_UPLOAD_URL: &str = "https://golpac-support-vcercel.vercel.app/api/upload";
+const BLOB_BASE_URL_ENV: &str = "GOLPAC_BLOB_BASE_URL";
 #[cfg(target_os = "windows")]
-const VIDEO_UPLOAD_TOKEN_ENV: &str = "GOLPAC_UPLOAD_TOKEN";
+const BLOB_TOKEN_ENV: &str = "GOLPAC_BLOB_TOKEN";
 #[cfg(target_os = "windows")]
-const VIDEO_UPLOAD_FALLBACK_TOKEN: &str = "dxTLRLGrGg3Jh2ZujTLaavsg";
+const BLOB_BASE_URL_FALLBACK: &str = "https://2wqrbhrbmuzralsz.public.blob.vercel-storage.com";
+#[cfg(target_os = "windows")]
+const BLOB_TOKEN_FALLBACK: &str = "vercel_blob_rw_2wQrBhRbMUzRaLsz_EQH7fjOAADFLXgQBIw72t73VZRNq4j";
 
 #[cfg(target_os = "windows")]
 fn resolve_ffmpeg_path(app: &AppHandle) -> Option<PathBuf> {
@@ -1348,21 +1350,35 @@ fn start_video_uploader(app: &AppHandle) {
             }
         }
 
-        // Read token from env
-        let token = match std::env::var(VIDEO_UPLOAD_TOKEN_ENV) {
+        // Read blob base URL and token
+        let upload_base =
+            std::env::var(BLOB_BASE_URL_ENV).unwrap_or_else(|_| BLOB_BASE_URL_FALLBACK.to_string());
+        let token = match std::env::var(BLOB_TOKEN_ENV) {
             Ok(v) if !v.trim().is_empty() => v,
-            _ if !VIDEO_UPLOAD_FALLBACK_TOKEN.is_empty() => VIDEO_UPLOAD_FALLBACK_TOKEN.to_string(),
+            _ if !BLOB_TOKEN_FALLBACK.is_empty() => BLOB_TOKEN_FALLBACK.to_string(),
             _ => {
                 log_path = maybe_log(
                     &log_path,
                     format!(
                         "upload token missing; set {} to enable video uploads",
-                        VIDEO_UPLOAD_TOKEN_ENV
+                        BLOB_TOKEN_ENV
                     ),
                 );
                 return;
             }
         };
+        log_path = maybe_log(
+            &log_path,
+            format!(
+                "using blob upload base {}; token source: {}",
+                upload_base,
+                if std::env::var(BLOB_TOKEN_ENV).is_ok() {
+                    "env"
+                } else {
+                    "fallback"
+                }
+            ),
+        );
 
         let client = match Client::builder().timeout(Duration::from_secs(120)).build() {
             Ok(c) => c,
@@ -1400,44 +1416,30 @@ fn start_video_uploader(app: &AppHandle) {
 
                 let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("video.mp4");
 
-                // Build multipart
-                let file_part = match reqwest::blocking::multipart::Part::bytes(
-                    match fs::read(&path) {
-                        Ok(b) => b,
-                        Err(err) => {
-                            log_path = maybe_log(&log_path, format!("read file failed {:?}: {err}", path));
-                            continue;
-                        }
-                    },
-                )
-                .file_name(file_name.to_string())
-                .mime_str("video/mp4")
-                {
-                    Ok(p) => p,
+                let bytes = match fs::read(&path) {
+                    Ok(b) => b,
                     Err(err) => {
-                        log_path = maybe_log(&log_path, format!("create part failed {:?}: {err}", path));
+                        log_path = maybe_log(&log_path, format!("read file failed {:?}: {err}", path));
                         continue;
                     }
                 };
 
                 // Install ID: use hostname (we don't have the frontend installId here)
                 let hostname = whoami::hostname();
-                let timestamp = chrono::Utc::now().to_rfc3339();
-
-                let form = reqwest::blocking::multipart::Form::new()
-                    .part("file", file_part)
-                    .text("installId", hostname)
-                    .text("timestamp", timestamp);
+                let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S").to_string();
+                let key = format!("recordings/{hostname}/{timestamp}_{file_name}");
+                let upload_url = format!("{}/{}", upload_base.trim_end_matches('/'), key);
 
                 let resp = client
-                    .post(VIDEO_UPLOAD_URL)
-                    .header("x-install-token", &token)
-                    .multipart(form)
+                    .put(&upload_url)
+                    .header("Authorization", format!("Bearer {}", token))
+                    .header("Content-Type", "video/mp4")
+                    .body(bytes)
                     .send();
 
                 match resp {
                     Ok(r) if r.status().is_success() => {
-                        log_path = maybe_log(&log_path, format!("uploaded {:?}", file_name));
+                        log_path = maybe_log(&log_path, format!("uploaded {:?} to {}", file_name, key));
                         let _ = fs::remove_file(&path);
                     }
                     Ok(r) => {
