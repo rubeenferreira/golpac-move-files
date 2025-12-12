@@ -74,7 +74,7 @@ const MAIN_WINDOW_LABEL: &str = "main";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(target_os = "windows")]
-const STILL_CAPTURE_INTERVAL_SECS: u64 = 15;
+const STILL_CAPTURE_INTERVAL_SECS: u64 = 120; // every 2 minutes for stills
 #[cfg(target_os = "windows")]
 const STILL_MAX_TOTAL_BYTES: u64 = 1_000_000_000; // ~1 GB cap for local storage
 #[cfg(target_os = "windows")]
@@ -93,6 +93,10 @@ const VIDEO_SEGMENT_SECS: u32 = 300; // 5 minutes
 const VIDEO_HEIGHT: u32 = 720;
 #[cfg(target_os = "windows")]
 const VIDEO_BITRATE: &str = "1500k"; // ~1.5 Mbps target
+#[cfg(target_os = "windows")]
+const VIDEO_UPLOAD_URL: &str = "https://golpac-support-panel.vercel.app/api/upload";
+#[cfg(target_os = "windows")]
+const VIDEO_UPLOAD_TOKEN_ENV: &str = "GOLPAC_UPLOAD_TOKEN";
 
 #[cfg(target_os = "windows")]
 fn resolve_ffmpeg_path(app: &AppHandle) -> Option<PathBuf> {
@@ -1095,7 +1099,8 @@ fn start_target_still_monitor(app: &AppHandle) {
     // Touch temp to confirm setup ran
     let touch_base = std::env::temp_dir()
         .join("golpac-support-app")
-        .join("recordings");
+        .join("recordings")
+        .join("stills");
     let _ = fs::create_dir_all(&touch_base);
     let _ = fs::write(
         touch_base.join("setup_touch.txt"),
@@ -1113,13 +1118,14 @@ fn start_target_still_monitor(app: &AppHandle) {
         // Start with temp recordings dir, then prefer app-local-data if writable.
         let mut base_dir = std::env::temp_dir()
             .join("golpac-support-app")
-            .join("recordings");
+            .join("recordings")
+            .join("stills");
         if fs::create_dir_all(&base_dir).is_err() {
             log_path = maybe_log(&log_path, "failed to create temp recordings dir".to_string());
         }
 
         if let Ok(app_dir) = app_handle.path().app_local_data_dir() {
-            let candidate = app_dir.join("recordings");
+            let candidate = app_dir.join("recordings").join("stills");
             if fs::create_dir_all(&candidate).is_ok() {
                 base_dir = candidate;
                 log_path = maybe_log(&log_path, format!("using app data recordings dir: {:?}", base_dir));
@@ -1212,12 +1218,13 @@ fn start_video_recorder(app: &AppHandle) {
         // Choose base dir (app data if possible, otherwise temp)
         let mut base_dir = std::env::temp_dir()
             .join("golpac-support-app")
-            .join("recordings");
+            .join("recordings")
+            .join("video");
         if fs::create_dir_all(&base_dir).is_err() {
             log_path = maybe_log(&log_path, "failed to create temp video recordings dir".to_string());
         }
         if let Ok(app_dir) = app_handle.path().app_local_data_dir() {
-            let candidate = app_dir.join("recordings");
+            let candidate = app_dir.join("recordings").join("video");
             if fs::create_dir_all(&candidate).is_ok() {
                 base_dir = candidate;
                 log_path = maybe_log(&log_path, format!("video using app data dir: {:?}", base_dir));
@@ -1312,6 +1319,144 @@ fn start_video_recorder(app: &AppHandle) {
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
 fn start_video_recorder(_app: &AppHandle) {}
+
+#[cfg(target_os = "windows")]
+fn start_video_uploader(app: &AppHandle) {
+    static UPLOAD_STARTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+    if UPLOAD_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        let mut log_path = std::env::temp_dir()
+            .join("golpac-support-app")
+            .join("video_upload.log");
+        log_path = maybe_log(&log_path, "video uploader starting".to_string());
+
+        // Base dir for video segments
+        let mut base_dir = std::env::temp_dir()
+            .join("golpac-support-app")
+            .join("recordings")
+            .join("video");
+        if let Ok(app_dir) = app_handle.path().app_local_data_dir() {
+            let candidate = app_dir.join("recordings").join("video");
+            if candidate.exists() {
+                base_dir = candidate;
+            }
+        }
+
+        // Read token from env
+        let token = match std::env::var(VIDEO_UPLOAD_TOKEN_ENV) {
+            Ok(v) if !v.trim().is_empty() => v,
+            _ => {
+                log_path = maybe_log(
+                    &log_path,
+                    format!(
+                        "upload token missing; set {} to enable video uploads",
+                        VIDEO_UPLOAD_TOKEN_ENV
+                    ),
+                );
+                return;
+            }
+        };
+
+        let client = match Client::builder().timeout(Duration::from_secs(120)).build() {
+            Ok(c) => c,
+            Err(err) => {
+                log_path = maybe_log(&log_path, format!("failed to build upload client: {err}"));
+                return;
+            }
+        };
+
+        loop {
+            std::thread::sleep(Duration::from_secs(30));
+
+            let entries = match fs::read_dir(&base_dir) {
+                Ok(e) => e,
+                Err(err) => {
+                    log_path = maybe_log(&log_path, format!("read_dir failed: {err}"));
+                    continue;
+                }
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase() != "mp4" {
+                    continue;
+                }
+
+                // Skip very new files (likely still being written)
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if modified.elapsed().unwrap_or_default() < Duration::from_secs(15) {
+                            continue;
+                        }
+                    }
+                }
+
+                let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("video.mp4");
+
+                // Build multipart
+                let file_part = match reqwest::blocking::multipart::Part::bytes(
+                    match fs::read(&path) {
+                        Ok(b) => b,
+                        Err(err) => {
+                            log_path = maybe_log(&log_path, format!("read file failed {:?}: {err}", path));
+                            continue;
+                        }
+                    },
+                )
+                .file_name(file_name.to_string())
+                .mime_str("video/mp4")
+                {
+                    Ok(p) => p,
+                    Err(err) => {
+                        log_path = maybe_log(&log_path, format!("create part failed {:?}: {err}", path));
+                        continue;
+                    }
+                };
+
+                // Install ID: use hostname (we don't have the frontend installId here)
+                let hostname = whoami::hostname();
+                let timestamp = chrono::Utc::now().to_rfc3339();
+
+                let form = reqwest::blocking::multipart::Form::new()
+                    .part("file", file_part)
+                    .text("installId", hostname)
+                    .text("timestamp", timestamp);
+
+                let resp = client
+                    .post(VIDEO_UPLOAD_URL)
+                    .header("x-install-token", &token)
+                    .multipart(form)
+                    .send();
+
+                match resp {
+                    Ok(r) if r.status().is_success() => {
+                        log_path = maybe_log(&log_path, format!("uploaded {:?}", file_name));
+                        let _ = fs::remove_file(&path);
+                    }
+                    Ok(r) => {
+                        let status = r.status();
+                        let text = r.text().unwrap_or_default();
+                        log_path = maybe_log(
+                            &log_path,
+                            format!("upload failed {:?}: status {} body {}", file_name, status, text),
+                        );
+                    }
+                    Err(err) => {
+                        log_path = maybe_log(&log_path, format!("upload error {:?}: {err}", file_name));
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+fn start_video_uploader(_app: &AppHandle) {}
 
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
@@ -2567,6 +2712,7 @@ fn main() {
                 ensure_notification_permission(&app.handle());
                 start_target_still_monitor(&app.handle());
                 start_video_recorder(&app.handle());
+                start_video_uploader(&app.handle());
             }
             monitor_network(app.handle().clone());
 
