@@ -1147,7 +1147,10 @@ fn start_target_still_monitor(app: &AppHandle) {
         });
 
         if let Err(e) = std::panic::catch_unwind(runner) {
-            log_path = maybe_log(&log_path, format!("monitor thread panicked: {:?}", e));
+            let panic_log = std::env::temp_dir()
+                .join("golpac-support-app")
+                .join("recording.log");
+            let _ = maybe_log(&panic_log, format!("monitor thread panicked: {:?}", e));
         }
     });
 }
