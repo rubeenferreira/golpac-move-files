@@ -94,6 +94,37 @@ const VIDEO_HEIGHT: u32 = 720;
 #[cfg(target_os = "windows")]
 const VIDEO_BITRATE: &str = "1500k"; // ~1.5 Mbps target
 
+#[cfg(target_os = "windows")]
+fn resolve_ffmpeg_path(app: &AppHandle) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(res_dir) = app.path().resource_dir() {
+        candidates.push(res_dir.join("bin").join("ffmpeg.exe"));
+        candidates.push(res_dir.join("ffmpeg.exe"));
+    }
+    if let Ok(exec_dir) = app.path().executable_dir() {
+        candidates.push(exec_dir.join("ffmpeg.exe"));
+        candidates.push(exec_dir.join("bin").join("ffmpeg.exe"));
+    }
+    if let Ok(cur_exe) = std::env::current_exe() {
+        if let Some(parent) = cur_exe.parent() {
+            candidates.push(parent.join("ffmpeg.exe"));
+            candidates.push(parent.join("bin").join("ffmpeg.exe"));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("bin").join("ffmpeg.exe"));
+        candidates.push(cwd.join("bin").join("ffmpeg.exe"));
+    }
+
+    for path in candidates {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
 //
 // ───────── System info ─────────
 //
@@ -1197,8 +1228,11 @@ fn start_video_recorder(app: &AppHandle) {
             log_path = maybe_log(&log_path, format!("video no app data dir, using temp: {:?}", base_dir));
         }
 
+        // Resolve ffmpeg path (bundled or PATH)
+        let ffmpeg_path = resolve_ffmpeg_path(&app_handle).unwrap_or_else(|| PathBuf::from("ffmpeg"));
+
         // Verify ffmpeg availability
-        let ffmpeg_ok = Command::new("ffmpeg")
+        let ffmpeg_ok = Command::new(&ffmpeg_path)
             .arg("-version")
             .creation_flags(CREATE_NO_WINDOW)
             .status()
@@ -1207,7 +1241,10 @@ fn start_video_recorder(app: &AppHandle) {
         if !ffmpeg_ok {
             log_path = maybe_log(
                 &log_path,
-                "ffmpeg not available in PATH; video recording disabled".to_string(),
+                format!(
+                    "ffmpeg not available at {:?} or PATH; video recording disabled",
+                    ffmpeg_path
+                ),
             );
             return;
         }
@@ -1222,7 +1259,7 @@ fn start_video_recorder(app: &AppHandle) {
 
         loop {
             let output_pattern = base_dir.join("video_%03d.mp4");
-            let mut cmd = Command::new("ffmpeg");
+            let mut cmd = Command::new(&ffmpeg_path);
             cmd.creation_flags(CREATE_NO_WINDOW)
                 .args([
                     "-hide_banner",
