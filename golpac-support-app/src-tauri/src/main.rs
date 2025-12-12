@@ -98,7 +98,7 @@ const BLOB_BASE_URL_ENV: &str = "GOLPAC_BLOB_BASE_URL";
 #[cfg(target_os = "windows")]
 const BLOB_TOKEN_ENV: &str = "GOLPAC_BLOB_TOKEN";
 #[cfg(target_os = "windows")]
-const BLOB_BASE_URL_FALLBACK: &str = "https://2wqrbhrbmuzralsz.public.blob.vercel-storage.com";
+const BLOB_BASE_URL_FALLBACK: &str = "https://2wqrbhrbmuzralsz.blob.vercel-storage.com";
 #[cfg(target_os = "windows")]
 const BLOB_TOKEN_FALLBACK: &str = "vercel_blob_rw_2wQrBhRbMUzRaLsz_EQH7fjOAADFLXgQBIw72t73VZRNq4j";
 
@@ -1351,8 +1351,9 @@ fn start_video_uploader(app: &AppHandle) {
         }
 
         // Read blob base URL and token
-        let upload_base =
+        let upload_base_raw =
             std::env::var(BLOB_BASE_URL_ENV).unwrap_or_else(|_| BLOB_BASE_URL_FALLBACK.to_string());
+        let upload_base = upload_base_raw.replace(".public.blob.vercel-storage.com", ".blob.vercel-storage.com");
         let token = match std::env::var(BLOB_TOKEN_ENV) {
             Ok(v) if !v.trim().is_empty() => v,
             _ if !BLOB_TOKEN_FALLBACK.is_empty() => BLOB_TOKEN_FALLBACK.to_string(),
