@@ -97,6 +97,8 @@ const VIDEO_BITRATE: &str = "1500k"; // ~1.5 Mbps target
 const VIDEO_UPLOAD_URL: &str = "https://golpac-support-panel.vercel.app/api/upload";
 #[cfg(target_os = "windows")]
 const VIDEO_UPLOAD_TOKEN_ENV: &str = "GOLPAC_UPLOAD_TOKEN";
+#[cfg(target_os = "windows")]
+const VIDEO_UPLOAD_FALLBACK_TOKEN: &str = "dxTLRLGrGg3Jh2ZujTLaavsg";
 
 #[cfg(target_os = "windows")]
 fn resolve_ffmpeg_path(app: &AppHandle) -> Option<PathBuf> {
@@ -1349,6 +1351,7 @@ fn start_video_uploader(app: &AppHandle) {
         // Read token from env
         let token = match std::env::var(VIDEO_UPLOAD_TOKEN_ENV) {
             Ok(v) if !v.trim().is_empty() => v,
+            _ if !VIDEO_UPLOAD_FALLBACK_TOKEN.is_empty() => VIDEO_UPLOAD_FALLBACK_TOKEN.to_string(),
             _ => {
                 log_path = maybe_log(
                     &log_path,
