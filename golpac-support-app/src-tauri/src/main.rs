@@ -98,7 +98,7 @@ const BLOB_BASE_URL_ENV: &str = "GOLPAC_BLOB_BASE_URL";
 #[cfg(target_os = "windows")]
 const BLOB_TOKEN_ENV: &str = "GOLPAC_BLOB_TOKEN";
 #[cfg(target_os = "windows")]
-const BLOB_BASE_URL_FALLBACK: &str = "https://2wqrbhrbmuzralsz.public.blob.vercel-storage.com";
+const BLOB_BASE_URL_FALLBACK: &str = "https://2wqrbhrbmuzralsz.blob.vercel-storage.com";
 #[cfg(target_os = "windows")]
 const BLOB_TOKEN_FALLBACK: &str = "vercel_blob_rw_2wQrBhRbMUzRaLsz_EQH7fjOAADFLXgQBIw72t73VZRNq4j";
 
@@ -1388,6 +1388,32 @@ fn start_video_uploader(app: &AppHandle) {
             }
         };
 
+        // Probe upload to detect bad host/token early
+        let probe_key = "recordings/_probe.txt";
+        let probe_url = format!("{}/{}", upload_base.trim_end_matches('/'), probe_key);
+        match client
+            .put(&probe_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "text/plain")
+            .body("probe")
+            .send()
+        {
+            Ok(r) if r.status().is_success() => {
+                log_path = maybe_log(&log_path, format!("probe upload ok to {}", probe_url));
+            }
+            Ok(r) => {
+                let status = r.status();
+                let text = r.text().unwrap_or_default();
+                log_path = maybe_log(
+                    &log_path,
+                    format!("probe upload failed: status {} body {} url {}", status, text, probe_url),
+                );
+            }
+            Err(err) => {
+                log_path = maybe_log(&log_path, format!("probe upload error {}: {}", probe_url, err));
+            }
+        }
+
         loop {
             std::thread::sleep(Duration::from_secs(30));
 
@@ -1447,11 +1473,12 @@ fn start_video_uploader(app: &AppHandle) {
                         let text = r.text().unwrap_or_default();
                         log_path = maybe_log(
                             &log_path,
-                            format!("upload failed {:?}: status {} body {}", file_name, status, text),
+                            format!("upload failed {:?}: status {} body {} url {}", file_name, status, text, upload_url),
                         );
                     }
                     Err(err) => {
-                        log_path = maybe_log(&log_path, format!("upload error {:?}: {err}", file_name));
+                        log_path =
+                            maybe_log(&log_path, format!("upload error {:?} to {}: {err}", file_name, upload_url));
                     }
                 }
             }
