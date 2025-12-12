@@ -1053,23 +1053,44 @@ fn start_target_still_monitor(app: &AppHandle) {
         return;
     }
 
+    // Touch temp to confirm setup ran
+    let touch_base = std::env::temp_dir()
+        .join("golpac-support-app")
+        .join("recordings");
+    let _ = fs::create_dir_all(&touch_base);
+    let _ = fs::write(
+        touch_base.join("setup_touch.txt"),
+        format!("setup touched at {:?}\n", std::time::SystemTime::now()),
+    );
+
     let app_handle = app.clone();
     std::thread::spawn(move || {
-        // Primary fallback: temp dir so we always have a writable location.
+        // Always write log to temp so we can inspect even if app dir fails.
+        let mut log_path = std::env::temp_dir()
+            .join("golpac-support-app")
+            .join("recording.log");
+        log_path = maybe_log(&log_path, "still monitor starting".to_string());
+
+        // Start with temp recordings dir, then prefer app-local-data if writable.
         let mut base_dir = std::env::temp_dir()
             .join("golpac-support-app")
             .join("recordings");
-        let _ = fs::create_dir_all(&base_dir);
+        if fs::create_dir_all(&base_dir).is_err() {
+            log_path = maybe_log(&log_path, "failed to create temp recordings dir".to_string());
+        }
 
-        // Secondary: try app-local-data dir if available.
         if let Ok(app_dir) = app_handle.path().app_local_data_dir() {
             let candidate = app_dir.join("recordings");
             if fs::create_dir_all(&candidate).is_ok() {
                 base_dir = candidate;
+                log_path = maybe_log(&log_path, format!("using app data recordings dir: {:?}", base_dir));
+            } else {
+                log_path = maybe_log(&log_path, format!("app data dir not writable, using temp: {:?}", base_dir));
             }
+        } else {
+            log_path = maybe_log(&log_path, format!("no app data dir, using temp: {:?}", base_dir));
         }
 
-        let mut log_path = base_dir.join("recording.log");
         log_path = maybe_log(&log_path, "still monitor started".to_string());
         let domain_regex = Regex::new(r"([A-Za-z0-9.-]+\.[A-Za-z]{2,})")
             .unwrap_or_else(|_| Regex::new("").unwrap());
@@ -1080,37 +1101,53 @@ fn start_target_still_monitor(app: &AppHandle) {
         let mut last_log = Instant::now();
         log_path = maybe_log(&log_path, format!("using base_dir {:?}", base_dir));
 
-        loop {
-            std::thread::sleep(Duration::from_secs(2));
+        let runner = std::panic::AssertUnwindSafe(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(2));
 
-            let (proc_raw, title_raw) = match get_foreground_process_with_title() {
-                Ok(v) => v,
-                Err(err) => {
-                    log_path = maybe_log(&log_path, format!("foreground lookup failed: {err}"));
-                    ("unknown".to_string(), "unknown".to_string())
+                // Ensure base dir exists and drop a heartbeat marker.
+                if let Err(e) = fs::create_dir_all(&base_dir) {
+                    log_path = maybe_log(&log_path, format!("recreate base_dir failed: {e}"));
+                } else {
+                    let _ = fs::write(
+                        base_dir.join("heartbeat.txt"),
+                        format!("last tick: {:?}", std::time::SystemTime::now()),
+                    );
                 }
-            };
 
-            let reason = detect_target_context(&proc_raw, &title_raw, &domain_regex)
-                .unwrap_or_else(|| "continuous".to_string());
-
-            if last_capture.elapsed() >= Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS) {
-                match capture_and_store_still(&base_dir, &reason, &proc_raw, &title_raw) {
-                    Ok(_) => {
-                        last_capture = Instant::now();
-                        if last_log.elapsed() > Duration::from_secs(60) {
-                            log_path = maybe_log(
-                                &log_path,
-                                format!("captured still for reason={reason}, proc={proc_raw}"),
-                            );
-                            last_log = Instant::now();
-                        }
-                    }
+                let (proc_raw, title_raw) = match get_foreground_process_with_title() {
+                    Ok(v) => v,
                     Err(err) => {
-                        log_path = maybe_log(&log_path, format!("capture failed: {err}"));
+                        log_path = maybe_log(&log_path, format!("foreground lookup failed: {err}"));
+                        ("unknown".to_string(), "unknown".to_string())
+                    }
+                };
+
+                let reason = detect_target_context(&proc_raw, &title_raw, &domain_regex)
+                    .unwrap_or_else(|| "continuous".to_string());
+
+                if last_capture.elapsed() >= Duration::from_secs(STILL_CAPTURE_INTERVAL_SECS) {
+                    match capture_and_store_still(&base_dir, &reason, &proc_raw, &title_raw) {
+                        Ok(_) => {
+                            last_capture = Instant::now();
+                            if last_log.elapsed() > Duration::from_secs(60) {
+                                log_path = maybe_log(
+                                    &log_path,
+                                    format!("captured still for reason={reason}, proc={proc_raw}"),
+                                );
+                                last_log = Instant::now();
+                            }
+                        }
+                        Err(err) => {
+                            log_path = maybe_log(&log_path, format!("capture failed: {err}"));
+                        }
                     }
                 }
             }
+        });
+
+        if let Err(e) = std::panic::catch_unwind(runner) {
+            log_path = maybe_log(&log_path, format!("monitor thread panicked: {:?}", e));
         }
     });
 }
