@@ -1439,6 +1439,7 @@ fn start_video_uploader(app: &AppHandle) {
                 if path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase() != "mp4" {
                     continue;
                 }
+                let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("video.mp4");
 
                 // Skip very new files (likely still being written)
                 let mut skip_due_to_age = false;
@@ -1463,8 +1464,6 @@ fn start_video_uploader(app: &AppHandle) {
                     );
                     continue;
                 }
-
-                let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("video.mp4");
 
                 let bytes = match fs::read(&path) {
                     Ok(b) => b,
