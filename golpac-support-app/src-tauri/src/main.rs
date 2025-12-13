@@ -1270,7 +1270,7 @@ fn start_video_recorder(app: &AppHandle) {
         );
 
         loop {
-            let output_pattern = base_dir.join("video_%03d.mp4");
+            let output_pattern = base_dir.join("%Y%m%dT%H%M%S.mp4");
             let mut cmd = Command::new(&ffmpeg_path);
             cmd.creation_flags(CREATE_NO_WINDOW)
                 .args([
@@ -1286,6 +1286,7 @@ fn start_video_recorder(app: &AppHandle) {
                 .args(["-draw_mouse", "1"])
                 .args(["-vf", &format!("scale=-2:{},fps={}", VIDEO_HEIGHT, VIDEO_FRAMERATE)])
                 .args(["-pix_fmt", "yuv420p"])
+                .args(["-movflags", "+faststart"])
                 .args(["-profile:v", "baseline"])
                 .args(["-level:v", "3.1"])
                 .args(["-vsync", "1"])
@@ -1296,6 +1297,7 @@ fn start_video_recorder(app: &AppHandle) {
                 .args(["-bufsize", "3000k"])
                 .args(["-f", "segment"])
                 .args(["-segment_time", &VIDEO_SEGMENT_SECS.to_string()])
+                .args(["-strftime", "1"])
                 .args(["-reset_timestamps", "1"])
                 .arg(output_pattern.to_string_lossy().to_string());
 
@@ -1439,12 +1441,27 @@ fn start_video_uploader(app: &AppHandle) {
                 }
 
                 // Skip very new files (likely still being written)
+                let mut skip_due_to_age = false;
+                let mut skip_due_to_size = false;
                 if let Ok(meta) = entry.metadata() {
                     if let Ok(modified) = meta.modified() {
-                        if modified.elapsed().unwrap_or_default() < Duration::from_secs(15) {
-                            continue;
+                        if modified.elapsed().unwrap_or_default() < Duration::from_secs(60) {
+                            skip_due_to_age = true;
                         }
                     }
+                    if meta.len() < 3_000_000 {
+                        skip_due_to_size = true;
+                    }
+                }
+                if skip_due_to_age || skip_due_to_size {
+                    log_path = maybe_log(
+                        &log_path,
+                        format!(
+                            "skip {:?} (age_skip={}, size_skip={})",
+                            file_name, skip_due_to_age, skip_due_to_size
+                        ),
+                    );
+                    continue;
                 }
 
                 let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("video.mp4");
